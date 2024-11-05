@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aiDCA"
+version = "0.0.1"
+authors = [
+  { name="Lorenzo Rosset", email="rosset.lorenzo@gmail.com"},
+  { name="Aurélien Decelle"},
+  { name="Beatriz Seoane"},
+  { name="Francesco Zamponi"},
+  { name="Martin Weigt"}
+]
+description = "Annotation Informed Direct Coupling Analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/rossetl/FeF_temp"
+Issues = "https://github.com/rossetl/FeF_temp/issues"
