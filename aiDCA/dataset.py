@@ -6,9 +6,10 @@ from abc import ABC, abstractmethod
 
 from torch.utils.data import Dataset, DataLoader
 import torch
-
 from adabmDCA.dataset import DatasetDCA
 from adabmDCA.fasta_utils import compute_weights
+from adabmDCA.functional import one_hot
+
 from aiDCA.utils import _parse_labels
 
 
@@ -25,11 +26,9 @@ class aiDataset(ABC, Dataset):
     @abstractmethod
     def __init__(
         self,
-        path_data: Union[str, Path],
         path_labels: Union[str, Path],
-        path_weights: Union[str, Path] = None,
-        alphabet: str = "protein",
         device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
     ):
         """Initialize the dataset.
 
@@ -37,10 +36,27 @@ class aiDataset(ABC, Dataset):
             path_data (Union[str, Path]): Path to multi sequence alignment in fasta format.
             path_weights (Union[str, Path], optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             path_labels (Union[str, Path]): Path to the file containing the labels of the sequences.
-            alphabet (str, optional): Selects the type of encoding of the sequences. Default choices are ("protein", "rna", "dna"). Defaults to "protein".
             device (torch.device, optional): Device to be used. Defaults to "cpu".
+            dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
-        pass
+        self.device = device
+        self.dtype = dtype
+        
+        # Import the labels
+        labels_dict_list = []
+        ann_df = pd.read_csv(path_labels).astype(str)
+        self.legend = [n for n in ann_df.columns if n != "Name"]
+        for leg in self.legend:
+                labels_dict_list.append({str(n) : str(l) for n, l in zip(ann_df["Name"], ann_df[leg])})
+                
+        # Ensure that the labels order follows the order of the data
+        sorted_labels_dict_list = []
+        for labels_dict in labels_dict_list:
+            sorted_labels_dict_list.append({k: labels_dict[k] for k in self.names})
+            
+        self.label_to_idx, self.labels_one_hot = _parse_labels(labels_dict_list)
+        self.idx_to_label = {v: k for k, v in self.label_to_idx.items()}
+        self.labels_one_hot = torch.tensor(self.labels_one_hot, dtype=torch.float32, device=device)
 
     @abstractmethod
     def __len__(self):
@@ -49,6 +65,24 @@ class aiDataset(ABC, Dataset):
     @abstractmethod
     def __getitem__(self, idx: int) -> Any:
         pass
+    
+    @abstractmethod
+    def to_label(
+        self,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
+        
+        Args:
+            labels (torch.Tensor): One-hot encoded labels or their magnetizations.
+            
+        Returns:
+            torch.Tensor: Original labels.
+        """
+        return np.vectorize(
+            lambda x: self.idx_to_label[np.argmax(x).item()],
+            signature="(l) -> ()",
+            )(labels.cpu().numpy())
 
     @abstractmethod
     def get_num_residues(self) -> int:
@@ -60,7 +94,7 @@ class aiDataset(ABC, Dataset):
     
     @abstractmethod
     def get_num_classes(self) -> int:
-        pass
+        return self.labels_one_hot.shape[1]
 
     @abstractmethod
     def get_effective_size(self) -> int:
@@ -81,29 +115,27 @@ class DatasetCat(DatasetDCA, aiDataset):
         path_weights: Union[str, Path] = None,
         alphabet: str = "protein",
         device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
     ):
         """Initialize the dataset.
 
         Args:
             path_data (Union[str, Path]): Path to multi sequence alignment in fasta format.
-            path_weights (Union[str, Path], optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             path_labels (Union[str, Path]): Path to the file containing the labels of the sequences.
+            path_weights (Union[str, Path], optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             alphabet (str, optional): Selects the type of encoding of the sequences. Default choices are ("protein", "rna", "dna"). Defaults to "protein".
             device (torch.device, optional): Device to be used. Defaults to "cpu".
         """
-        super().__init__(path_data, path_weights, alphabet, device)
+        super(DatasetDCA).__init__(path_data, path_weights, alphabet, device)
+        super(aiDataset).__init__(path_labels, device, dtype)
         
         # Move data to device
-        self.data = torch.tensor(self.data, dtype=torch.int32, device=device)
-        
-        # Import the labels
-        labels_dict_list = []
-        ann_df = pd.read_csv(path_labels).astype(str)
-        self.legend = [n for n in ann_df.columns if n != "Name"]
-        for leg in self.legend:
-                labels_dict_list.append({str(n) : str(l) for n, l in zip(ann_df["Name"], ann_df[leg])})
-        self.label_to_idx, self.labels_one_hot = _parse_labels(labels_dict_list)
-        self.labels_one_hot = torch.tensor(self.labels_one_hot, dtype=torch.float32, device=device)
+        self.num_states = self.get_num_states()
+        self.data_one_hot = one_hot(
+            torch.tensor(self.data, dtype=torch.int32, device=device),
+            num_classes=self.num_states,
+        ).to(dtype)
+        self.weights = torch.tensor(self.weights, dtype=dtype, device=device)
 
 
     def __len__(self):
@@ -112,10 +144,25 @@ class DatasetCat(DatasetDCA, aiDataset):
 
     def __getitem__(self, idx: int) -> Any:
         return {
-            "visible": self.data[idx],
+            "visible": self.data_one_hot[idx],
             "label": self.labels_one_hot[idx],
             "weight": self.weights[idx],
         }
+        
+    
+    def to_label(
+        self,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
+        
+        Args:
+            labels (torch.Tensor): One-hot encoded labels or their magnetizations.
+            
+        Returns:
+            torch.Tensor: Original labels.
+        """
+        return super(aiDataset).to_label(labels)
     
     
     def get_num_residues(self) -> int:
@@ -142,7 +189,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         Returns:
             int: Number of categories.
         """
-        return self.labels_one_hot.shape[1]
+        return super(aiDataset).get_num_classes()
     
     
     def get_effective_size(self) -> int:
@@ -174,42 +221,33 @@ class DatasetBin(aiDataset):
         path_labels: Union[str, Path],
         path_weights: Union[str, Path] = None,
         device: torch.device = torch.device("cpu"),
+        dtype: torch.dtype = torch.float32,
     ):
         """Initialize the dataset.
 
         Args:
             path_data (Union[str, Path]): Path to the file containing the binary data.
             path_labels (Union[str, Path]): Path to the file containing the labels of the data.
+            path_weights (Union[str, Path], optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             device (torch.device, optional): Device to be used. Defaults to "cpu".
+            dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
+        super(aiDataset).__init__(path_labels, device=device, dtype=dtype)
+        
         self.data = torch.tensor(
             np.loadtxt(path_data),
-            dtype=torch.float32,
+            dtype=dtype,
             device=device,
         )
         self.names = np.arange(len(self.data)).astype(str)
         if path_weights is not None:
             self.weights = torch.tensor(
                 np.loadtxt(path_weights),
-                dtype=torch.float32,
+                dtype=dtype,
                 device=device,
             ).view(-1, 1)
         else:
-            self.weights = compute_weights(self.data, device=device)
-        # Import the labels
-        labels_dict_list = []
-        ann_df = pd.read_csv(path_labels).astype(str)
-        self.legend = [n for n in ann_df.columns if n != "Name"]
-        for leg in self.legend:
-                labels_dict_list.append({str(n) : str(l) for n, l in zip(ann_df["Name"], ann_df[leg])})
-                
-        # Ensure that the labels order follows the order of the data
-        sorted_labels_dict_list = []
-        for labels_dict in labels_dict_list:
-            sorted_labels_dict_list.append({k: labels_dict[k] for k in self.names})
-            
-        self.label_to_idx, self.labels_one_hot = _parse_labels(labels_dict_list)
-        self.labels_one_hot = torch.tensor(self.labels_one_hot, dtype=torch.float32, device=device)
+            self.weights = compute_weights(self.data, device=device).to(dtype)
    
         
     def __len__(self):
@@ -222,6 +260,21 @@ class DatasetBin(aiDataset):
             "label": self.labels_one_hot[idx],
             "weight": self.weights[idx],
         }
+        
+
+    def to_label(
+        self,
+        labels: torch.Tensor,
+    ) -> torch.Tensor:
+        """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
+        
+        Args:
+            labels (torch.Tensor): One-hot encoded labels or their magnetizations.
+            
+        Returns:
+            torch.Tensor: Original labels.
+        """
+        return super(aiDataset).to_label(labels)
     
     
     def get_num_residues(self) -> int:
@@ -248,7 +301,7 @@ class DatasetBin(aiDataset):
         Returns:
             int: Number of categories.
         """
-        return self.labels_one_hot.shape[1]
+        return super(aiDataset).get_num_classes()
     
     
     def get_effective_size(self) -> int:
