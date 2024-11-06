@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from torch.utils.data import Dataset, DataLoader
 import torch
 from adabmDCA.dataset import DatasetDCA
-from adabmDCA.fasta_utils import compute_weights
+from adabmDCA.fasta_utils import compute_weights, get_tokens
 from adabmDCA.functional import one_hot
 
 from aiDCA.utils import _parse_labels
@@ -126,8 +126,8 @@ class DatasetCat(DatasetDCA, aiDataset):
             alphabet (str, optional): Selects the type of encoding of the sequences. Default choices are ("protein", "rna", "dna"). Defaults to "protein".
             device (torch.device, optional): Device to be used. Defaults to "cpu".
         """
-        super(DatasetDCA).__init__(path_data, path_weights, alphabet, device)
-        super(aiDataset).__init__(path_labels, device, dtype)
+        DatasetDCA.__init__(self, path_data, path_weights, alphabet, device)
+        aiDataset.__init__(self, path_labels, device, dtype)
         
         # Move data to device
         self.num_states = self.get_num_states()
@@ -135,7 +135,8 @@ class DatasetCat(DatasetDCA, aiDataset):
             torch.tensor(self.data, dtype=torch.int32, device=device),
             num_classes=self.num_states,
         ).to(dtype)
-        self.weights = torch.tensor(self.weights, dtype=dtype, device=device)
+        self.weights = self.weights.to(dtype).view(-1, 1)
+        self.alphabet = get_tokens(alphabet)
 
 
     def __len__(self):
@@ -162,7 +163,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         Returns:
             torch.Tensor: Original labels.
         """
-        return super(aiDataset).to_label(labels)
+        return aiDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -189,7 +190,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         Returns:
             int: Number of categories.
         """
-        return super(aiDataset).get_num_classes()
+        return aiDataset.get_num_classes(self)
     
     
     def get_effective_size(self) -> int:
@@ -232,7 +233,6 @@ class DatasetBin(aiDataset):
             device (torch.device, optional): Device to be used. Defaults to "cpu".
             dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
-        super(aiDataset).__init__(path_labels, device=device, dtype=dtype)
         
         self.data = torch.tensor(
             np.loadtxt(path_data),
@@ -247,7 +247,13 @@ class DatasetBin(aiDataset):
                 device=device,
             ).view(-1, 1)
         else:
-            self.weights = compute_weights(self.data, device=device).to(dtype)
+            #self.weights = compute_weights(self.data, device=device).to(dtype).view(-1, 1)
+            self.weights = torch.ones(len(self.data), 1, dtype=dtype, device=device).view(-1, 1)
+        self.alphabet = get_tokens("01")
+        
+        # Import the labels
+        aiDataset.__init__(self, path_labels, device=device, dtype=dtype)
+        print(f"Dataset imported: M = {self.data.shape[0]}, L = {self.data.shape[1]}, M_eff = {int(self.weights.sum())}.")
    
         
     def __len__(self):
@@ -274,7 +280,7 @@ class DatasetBin(aiDataset):
         Returns:
             torch.Tensor: Original labels.
         """
-        return super(aiDataset).to_label(labels)
+        return aiDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -292,7 +298,7 @@ class DatasetBin(aiDataset):
         Returns:
             int: Number of states.
         """
-        return self.data.shape[1]
+        return 2
     
     
     def get_num_classes(self) -> int:
@@ -301,7 +307,7 @@ class DatasetBin(aiDataset):
         Returns:
             int: Number of categories.
         """
-        return super(aiDataset).get_num_classes()
+        return aiDataset.get_num_classes(self)
     
     
     def get_effective_size(self) -> int:
@@ -321,3 +327,46 @@ class DatasetBin(aiDataset):
         self.names = self.names[perm]
         self.weights = self.weights[perm]
         self.labels_one_hot = self.labels_one_hot[perm]
+        
+        
+def get_dataset(
+    path_data: Union[str, Path],
+    path_labels: Union[str, Path],
+    path_weights: Union[str, Path] = None,
+    alphabet: str = "protein",
+    device: torch.device = torch.device("cpu"),
+    dtype: torch.dtype = torch.float32,
+) -> aiDataset:
+    """Returns the proper dataset object based on the input data format.
+
+    Args:
+        path_data (Union[str, Path]): Path to the data file.
+        path_labels (Union[str, Path]): Path to the labels file.
+        path_weights (Union[str, Path], optional): Path to the weights file. Defaults to None.
+        alphabet (str, optional): Alphabet for encoding the data. It is uneffective for binary data. Defaults to "protein".
+        device (torch.device, optional): Device. Defaults to torch.device("cpu").
+        dtype (torch.dtype, optional): Data type. Defaults to torch.float32.
+
+    Returns:
+        aiDataset: Initilized dataset object.
+    """
+    # Check if the data is in fasta format
+    with open(path_data, "r") as f:
+        first_line = f.readline()
+        if first_line.startswith(">"):
+            return DatasetCat(
+                path_data=path_data,
+                path_labels=path_labels,
+                path_weights=path_weights,
+                alphabet=alphabet,
+                device=device,
+                dtype=dtype,
+            )
+        else:
+            return DatasetBin(
+                path_data=path_data,
+                path_labels=path_labels,
+                path_weights=path_weights,
+                device=device,
+                dtype=dtype,
+            )

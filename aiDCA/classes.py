@@ -18,6 +18,8 @@ class aiRBM(ABC):
     ):
         if params is not None:
             self.params = {params[k].to(device=device, dtype=dtype) for k in params}
+        else:
+            self.params = None
 
         self.device = device
         self.dtype = dtype
@@ -96,25 +98,25 @@ class aiRBM(ABC):
     def load(
         self,
         filename: str,
-        index: int,
         device: torch.device,
         dtype: torch.dtype,
+        index: int = None,
         set_rng_state: bool = False,
     ) -> None:
         """Loads the parameters of the aiRBM.
 
         Args:
             filename (str): Path to the h5 archive.
-            index (int): Index of the machine to load.
             device (torch.device): PyTorch device on which to load the parameters.
             dtype (torch.dtype): Dtype for the parameters.
+            index (int): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
             set_rng_state (bool): Restore the random state at the given epoch (useful to restore training). Defaults to False.
         """
         self.params = _load_model(
             filename=filename,
-            index=index,
             device=device,
             dtype=dtype,
+            index=index,
             set_rng_state=set_rng_state,
         )
     

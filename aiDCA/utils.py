@@ -51,8 +51,13 @@ def _parse_labels(labels_dict_list: List[dict]) -> Tuple[dict, np.array]:
 
 
 def get_saved_updates(filename: str) -> np.ndarray:
-    """Args:
-    filename: str:
+    """Returns the list of indices of the saved updates in the h5 archive.
+
+    Args:
+        filename (str): Path to the h5 archive.
+
+    Returns:
+        np.ndarray: Array of the indices of the saved updates.
     """
     updates = []
     with h5py.File(filename, "r") as f:

@@ -1,7 +1,7 @@
 from typing import Dict
-
 import numpy as np
 import torch
+from adabmDCA.functional import one_hot
 
 
 def _init_parameters(
@@ -83,10 +83,15 @@ def _init_chains(
         size=(num_samples, num_labels),
         device=params["lbias"].device,
         dtype=params["lbias"].dtype) / 2
-    visible = torch.bernoulli(mv)
+    visible = one_hot(
+        torch.multinomial(mv.view(-1, num_states), 1).view(-1, num_visibles),
+        num_classes=num_states,
+    ).to(params["weight_matrix"].dtype)
     label = torch.bernoulli(ml)
+    visible_flat = visible.view(num_samples, -1)
+    weight_matrix_flat = params["weight_matrix"].view(num_visibles * num_states, -1)
     
-    mh = torch.sigmoid((params["hbias"] + (visible @ params["weight_matrix"]) + (label @ params["label_matrix"])))
+    mh = torch.sigmoid((params["hbias"] + (visible_flat @ weight_matrix_flat) + (label @ params["label_matrix"])))
     hidden = torch.bernoulli(mh)
     
     return {"visible": visible, "hidden": hidden, "label": label}

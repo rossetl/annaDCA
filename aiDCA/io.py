@@ -42,23 +42,30 @@ def _save_model(
 
 def _load_model(
     filename: str,
-    index: int,
     device: torch.device,
     dtype: torch.dtype,
+    index: int = None,
     set_rng_state: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Loads a RBM from an h5 archive.
 
     Args:
         filename (str): Path to the h5 archive.
-        index (int): Index of the machine to load.
         device (torch.device): PyTorch device on which to load the parameters and the chains.
         dtype (torch.dtype): Dtype for the parameters and the chains.
+        index (int): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
         set_rng_state (bool): Restore the random state at the given epoch (useful to restore training). Defaults to False.
 
     Returns:
         Dict[str, torch.Tensor]: Parameters of the loaded model.
     """
+    list_updates = get_saved_updates(filename)
+    if index is None:
+        index = list_updates[-1]
+    else:
+        if index not in list_updates:
+            raise ValueError(f"Index {index} not found in the h5 archive.")
+    
     last_file_key = f"update_{index}"
     with h5py.File(filename, "r") as f:
         weight_matrix = torch.tensor(

@@ -2,17 +2,18 @@ from typing import Optional, Dict, Self
 import numpy as np
 
 import torch
-from adabmDCA.fasta_utils import import_from_fasta
+from adabmDCA.fasta_utils import import_from_fasta, get_tokens, encode_sequence
+from adabmDCA.functional import one_hot
 
 from aiDCA.classes import aiRBM
 from aiDCA.io import _save_chains
-from aiDCA.binary.statmech import _compute_energy, _compute_energy_visibles, _compute_energy_hiddens
-from aiDCA.binary.sampling import _sample, _sample_hiddens, _sample_visibles, _sample_labels
-from aiDCA.binary.init import _init_parameters, _init_chains
-from aiDCA.binary.grad import _compute_gradient
+from aiDCA.categorical.statmech import _compute_energy, _compute_energy_visibles, _compute_energy_hiddens
+from aiDCA.categorical.sampling import _sample, _sample_hiddens, _sample_visibles, _sample_labels
+from aiDCA.categorical.init import _init_parameters, _init_chains
+from aiDCA.categorical.grad import _compute_gradient
 
 
-class aiRBMbin(aiRBM):
+class aiRBMcat(aiRBM):
     def __init__(
         self,
         params: Dict[str, torch.Tensor] = None,
@@ -243,7 +244,7 @@ class aiRBMbin(aiRBM):
         Returns:
             Dict[str, torch.Tensor]: Initial Markov chain.
         """
-        return _init_chains(num_samples, self.params)
+        return _init_chains(num_samples, self.num_states(), self.params)
     
     
     @staticmethod
@@ -251,7 +252,7 @@ class aiRBMbin(aiRBM):
         filename: str,
         visible: torch.Tensor,
         label: torch.Tensor,
-        **kwargs,
+        alphabet: str = "protein",
     ) -> None:
         """Save the persistent chains on a fasta file.
 
@@ -259,12 +260,15 @@ class aiRBMbin(aiRBM):
             filename (str): Path to the fasta file.
             visible (torch.Tensor): Visible units of the chains.
             label (torch.Tensor): Labels of the chains.
+            alphabet (str, optional): Alphabet of the sequences. Defaults to "protein".
         """
+        tokens = get_tokens(alphabet)
+        visible = torch.argmax(visible, dim=-1)
         _save_chains(
             filename=filename,
             visible=visible,
             label=label,
-            alphabet="01",
+            alphabet=tokens,
         )
         
     
@@ -273,6 +277,7 @@ class aiRBMbin(aiRBM):
         filename: str,
         device: torch.device,
         dtype: torch.dtype,
+        alphabet: str = "protein",
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """Load the persistent chains from a fasta file.
@@ -281,16 +286,17 @@ class aiRBMbin(aiRBM):
             filename (str): Path to the fasta file.
             device (torch.device): Device on which to load the chains.
             dtype (torch.dtype): Data type for the chains.
+            alphabet (str, optional): Alphabet of the sequences. Defaults to "protein".
 
         Returns:
             Dict[str, torch.Tensor]: Visible and hidden units and labels of the chains.
         """
-        headers, sequences = import_from_fasta(filename)
-        
-        label = np.vectorize(lambda x: np.array([int(i) for i in x]), signature="() -> (l)")(headers)
-        visible = np.vectorize(lambda x: np.array([int(i) for i in x]), signature="() -> (l)")(sequences)
+        tokens = get_tokens(alphabet)
+        headers, sequences = import_from_fasta(filename, tokens)
+        label = np.vectorize(lambda x: np.array([int(i) for i in x]))(headers)
+        visible = encode_sequence(sequences, tokens)
         label = torch.tensor(label, device=device, dtype=dtype)
-        visible = torch.tensor(visible, device=device, dtype=dtype)
+        visible = one_hot(torch.tensor(visible), len(tokens)).to(device=device, dtype=dtype)
         if self.params is not None:
             hidden, _ = self.sample_hiddens(visible, label)
         else:
@@ -327,6 +333,7 @@ class aiRBMbin(aiRBM):
         self,
         num_visibles: int,
         num_hiddens: int,
+        num_states: int,
         num_labels: int,
         frequencies_visibles: torch.Tensor = None,
         frequencies_labels: torch.Tensor = None,
@@ -343,6 +350,7 @@ class aiRBMbin(aiRBM):
         Args:
             num_visibles (int): Number of visible units.
             num_hiddens (int): Number of hidden units.
+            num_states (int): Number of states of the categorical variables.
             num_labels (int): Number of labels.
             frequencies_visibles (torch.Tensor): Empirical frequencies of the visible units. Defaults to None.
             frequencies_labels (torch.Tensor): Empirical frequencies of the labels. Defaults to None.
@@ -358,6 +366,7 @@ class aiRBMbin(aiRBM):
         self.params = _init_parameters(
             num_visibles=num_visibles,
             num_hiddens=num_hiddens,
+            num_states=num_states,
             num_labels=num_labels,
             frequencies_visibles=frequencies_visibles,
             frequencies_labels=frequencies_labels,
@@ -393,13 +402,22 @@ class aiRBMbin(aiRBM):
         return super().num_classes()
     
     
+    def num_states(self) -> int:
+        """Returns the number of states of the categorical variables.
+
+        Returns:
+            int: Number of states of the visible units.
+        """
+        return self.params["vbias"].shape[1]
+    
+    
     def logZ0(self) -> float:
         """Computes the initial log partition function for the aiRBM.
 
         Returns:
             float: Initial log partition function.
         """
-        logZ_visibles = torch.log(1.0 + torch.exp(self.params["vbias"])).sum()
+        logZ_visibles = torch.log(torch.exp(self.params["vbias"]).sum(1)).sum()
         logZ_labels = torch.log(1.0 + torch.exp(self.params["lbias"])).sum()
         logZ_hiddens = torch.log(1.0 + torch.exp(self.params["hbias"])).sum()
         return logZ_visibles + logZ_labels + logZ_hiddens
