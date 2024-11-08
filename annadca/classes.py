@@ -1,14 +1,14 @@
 from typing import Optional, Self, Dict
 from abc import ABC, abstractmethod
 
-from aiDCA.dataset import aiDataset
-from aiDCA.io import _save_model, _load_model
+from annadca.dataset import annaDataset
+from annadca.io import _save_model, _load_model
 
 import torch
         
         
-class aiRBM(ABC):
-    """Abstract class for the annotation-informed Restricted Boltzmann Machine (aiRBM)"""
+class annaRBM(ABC):
+    """Abstract class for the annotation-assisted Restricted Boltzmann Machine (annaRBM)"""
 
     def __init__(
         self,
@@ -38,7 +38,7 @@ class aiRBM(ABC):
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            aiRBM: aiRBM instance with the parameters moved to the specified device and/or dtype.
+            annaRBM: annaRBM instance with the parameters moved to the specified device and/or dtype.
         """
         if device is not None:
             self.params = {self.params[key].to(device) for key in self.params}
@@ -56,21 +56,21 @@ class aiRBM(ABC):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> Self:
-        """Clone the BBParams instance.
+        """Clone the annaRBM instance.
 
         Args:
             device (Optional[torch.device], optional): Device. Defaults to None.
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            aiRBM: aiRBM instance cloned.
+            annaRBM: annaRBM instance cloned.
         """
         if device is None:
             device = self.device
         if dtype is None:
             dtype = self.dtype
             
-        return aiRBM(
+        return annaRBM(
             params=self.params,
             device=device,
             dtype=dtype,
@@ -82,7 +82,7 @@ class aiRBM(ABC):
         filename: str,
         num_updates: int,
     ) -> None:
-        """Save the parameters of the aiRBM.
+        """Save the parameters of the annaRBM.
 
         Args:
             filename (str): Path to the h5 archive where to store the model.
@@ -103,7 +103,7 @@ class aiRBM(ABC):
         index: int = None,
         set_rng_state: bool = False,
     ) -> None:
-        """Loads the parameters of the aiRBM.
+        """Loads the parameters of the annaRBM.
 
         Args:
             filename (str): Path to the h5 archive.
@@ -244,7 +244,7 @@ class aiRBM(ABC):
         beta: float = 1.0,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
-        """Samples from the aiRBM.
+        """Samples from the annaRBM.
 
         Args:
             gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
@@ -333,13 +333,13 @@ class aiRBM(ABC):
     @abstractmethod
     def init_parameters(
         self,
-        dataset: aiDataset,
+        dataset: annaDataset,
         num_hiddens: int,
         device: torch.device,
         dtype: torch.dtype,
         sigma: float = 1e-4,
     ) -> Self:
-        """Initializes the parameters of the aiRBM.
+        """Initializes the parameters of the annaRBM.
 
         Args:
             dataset (aiDataset): Dataset.
@@ -349,7 +349,7 @@ class aiRBM(ABC):
             sigma (float, optional): Standard deviation of the weight matrix. Defaults to 1e-4.
 
         Returns:
-            Self: aiRBM instance.
+            Self: annaRBM instance.
         """
         pass
         
@@ -386,7 +386,7 @@ class aiRBM(ABC):
         
     @abstractmethod
     def logZ0(self) -> float:
-        """Computes the initial log partition function for the aiRBM.
+        """Computes the initial log partition function for the annaRBM.
 
         Returns:
             float: Initial log partition function.

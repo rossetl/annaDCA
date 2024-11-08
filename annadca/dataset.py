@@ -7,10 +7,10 @@ from abc import ABC, abstractmethod
 from torch.utils.data import Dataset, DataLoader
 import torch
 from adabmDCA.dataset import DatasetDCA
-from adabmDCA.fasta_utils import compute_weights, get_tokens
+from adabmDCA.fasta_utils import get_tokens
 from adabmDCA.functional import one_hot
 
-from aiDCA.utils import _parse_labels
+from annadca.utils import _parse_labels
 
 
 class DataLoader_shuffle(DataLoader):
@@ -19,7 +19,7 @@ class DataLoader_shuffle(DataLoader):
         return super().__iter__()
     
 
-class aiDataset(ABC, Dataset):
+class annaDataset(ABC, Dataset):
     """Abstract class for the dataset that handles annotations.
     """
 
@@ -105,7 +105,7 @@ class aiDataset(ABC, Dataset):
         pass
 
 
-class DatasetCat(DatasetDCA, aiDataset):
+class DatasetCat(DatasetDCA, annaDataset):
     """Dataset class for processing multi-sequence alignments of biological sequences.
     """
     def __init__(
@@ -127,7 +127,7 @@ class DatasetCat(DatasetDCA, aiDataset):
             device (torch.device, optional): Device to be used. Defaults to "cpu".
         """
         DatasetDCA.__init__(self, path_data, path_weights, alphabet, device)
-        aiDataset.__init__(self, path_labels, device, dtype)
+        annaDataset.__init__(self, path_labels, device, dtype)
         
         # Move data to device
         self.num_states = self.get_num_states()
@@ -163,7 +163,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         Returns:
             torch.Tensor: Original labels.
         """
-        return aiDataset.to_label(self, labels)
+        return annaDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -190,7 +190,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         Returns:
             int: Number of categories.
         """
-        return aiDataset.get_num_classes(self)
+        return annaDataset.get_num_classes(self)
     
     
     def get_effective_size(self) -> int:
@@ -212,7 +212,7 @@ class DatasetCat(DatasetDCA, aiDataset):
         self.labels_one_hot = self.labels_one_hot[perm]
         
 
-class DatasetBin(aiDataset):
+class DatasetBin(annaDataset):
     """Dataset class for processing binary data.
     """
     
@@ -252,7 +252,7 @@ class DatasetBin(aiDataset):
         self.alphabet = get_tokens("01")
         
         # Import the labels
-        aiDataset.__init__(self, path_labels, device=device, dtype=dtype)
+        annaDataset.__init__(self, path_labels, device=device, dtype=dtype)
         print(f"Dataset imported: M = {self.data.shape[0]}, L = {self.data.shape[1]}, M_eff = {int(self.weights.sum())}.")
    
         
@@ -280,7 +280,7 @@ class DatasetBin(aiDataset):
         Returns:
             torch.Tensor: Original labels.
         """
-        return aiDataset.to_label(self, labels)
+        return annaDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -307,7 +307,7 @@ class DatasetBin(aiDataset):
         Returns:
             int: Number of categories.
         """
-        return aiDataset.get_num_classes(self)
+        return annaDataset.get_num_classes(self)
     
     
     def get_effective_size(self) -> int:
@@ -336,7 +336,7 @@ def get_dataset(
     alphabet: str = "protein",
     device: torch.device = torch.device("cpu"),
     dtype: torch.dtype = torch.float32,
-) -> aiDataset:
+) -> annaDataset:
     """Returns the proper dataset object based on the input data format.
 
     Args:

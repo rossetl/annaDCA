@@ -1,11 +1,11 @@
 from typing import Dict
 import torch
 
-from aiDCA.classes import aiRBM
+from annadca.classes import annaRBM
 
 
 def pcd(
-    rbm: aiRBM,
+    rbm: annaRBM,
     data_batch: Dict[str, torch.Tensor],
     chains: Dict[str, torch.Tensor],
     gibbs_steps: int,
@@ -15,7 +15,7 @@ def pcd(
     """Computes the gradient of the parameters of the model and the Markov chains using the Persistent Contrastive Divergence algorithm.
 
     Args:
-        rbm (aiRBM): RBM model to be trained.
+        rbm (annaRBM): RBM model to be trained.
         data_batch (Dict[str, torch.Tensor]): Batch of data.
         chains (Dict[str, torch.Tensor]): Persistent chains.
         gibbs_steps (int): Number of Alternating Gibbs Sampling steps.

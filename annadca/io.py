@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from adabmDCA.fasta_utils import write_fasta, get_tokens
 
-from aiDCA.utils import get_saved_updates
+from annadca.utils import get_saved_updates
 
 def _save_model(
     params: Dict[str, torch.Tensor],

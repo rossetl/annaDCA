@@ -12,20 +12,20 @@ from adabmDCA.utils import get_device
 from adabmDCA.fasta_utils import get_tokens
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
 
-from aiDCA.parser import add_args_train
-from aiDCA.dataset import DatasetBin, DatasetCat, get_dataset
-from aiDCA.binary import aiRBMbin
-from aiDCA.categorical import aiRBMcat
-from aiDCA.binary.stats import get_freq_single_point as get_freq_single_point_bin
-from aiDCA.dataset import DataLoader_shuffle as DataLoader
-from aiDCA.train import pcd
-from aiDCA.utils import get_saved_updates
+from annadca.parser import add_args_train
+from annadca.dataset import DatasetBin, DatasetCat, get_dataset
+from annadca.binary import annaRBMbin
+from annadca.categorical import annaRBMcat
+from annadca.binary.stats import get_freq_single_point as get_freq_single_point_bin
+from annadca.dataset import DataLoader_shuffle as DataLoader
+from annadca.train import pcd
+from annadca.utils import get_saved_updates
 
 
 # import command-line input arguments
 def create_parser():
     # Important arguments
-    parser = argparse.ArgumentParser(description='Train an aiRBM model.')
+    parser = argparse.ArgumentParser(description='Train an annaRBM model.')
     parser = add_args_train(parser) 
     
     return parser
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     elif args.dtype == "float64":
         args.dtype = torch.float64
     
-    print("\n" + "".join(["*"] * 10) + f" Training aiRBM model " + "".join(["*"] * 10) + "\n")
+    print("\n" + "".join(["*"] * 10) + f" Training annaRBM model " + "".join(["*"] * 10) + "\n")
     device = get_device(args.device)
     print("\n")
     print(f"Input data:\t\t{args.data}")
@@ -117,14 +117,14 @@ if __name__ == '__main__':
     num_labels = dataset.get_num_classes()
     num_states = dataset.get_num_states()
     if isinstance(dataset, DatasetBin):
-        rbm = aiRBMbin()
+        rbm = annaRBMbin()
         frequences_visible = get_freq_single_point_bin(
             data=dataset.data,
             weights=dataset.weights,
             pseudo_count=args.pseudocount,
         )
     elif isinstance(dataset, DatasetCat):
-        rbm = aiRBMcat()
+        rbm = annaRBMcat()
         frequences_visible = get_freq_single_point_cat(
             data=dataset.data_one_hot,
             weights=dataset.weights,

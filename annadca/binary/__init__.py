@@ -4,15 +4,15 @@ import numpy as np
 import torch
 from adabmDCA.fasta_utils import import_from_fasta
 
-from aiDCA.classes import aiRBM
-from aiDCA.io import _save_chains
-from aiDCA.binary.statmech import _compute_energy, _compute_energy_visibles, _compute_energy_hiddens
-from aiDCA.binary.sampling import _sample, _sample_hiddens, _sample_visibles, _sample_labels
-from aiDCA.binary.init import _init_parameters, _init_chains
-from aiDCA.binary.grad import _compute_gradient
+from annadca.classes import annaRBM
+from annadca.io import _save_chains
+from annadca.binary.statmech import _compute_energy, _compute_energy_visibles, _compute_energy_hiddens
+from annadca.binary.sampling import _sample, _sample_hiddens, _sample_visibles, _sample_labels
+from annadca.binary.init import _init_parameters, _init_chains
+from annadca.binary.grad import _compute_gradient
 
 
-class aiRBMbin(aiRBM):
+class annaRBMbin(annaRBM):
     def __init__(
         self,
         params: Dict[str, torch.Tensor] = None,
@@ -34,7 +34,7 @@ class aiRBMbin(aiRBM):
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            aiRBM: aiRBM instance with the parameters moved to the specified device and/or dtype.
+            annaRBM: annaRBM instance with the parameters moved to the specified device and/or dtype.
         """
         return super().to(device, dtype)
     
@@ -44,14 +44,14 @@ class aiRBMbin(aiRBM):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> Self:
-        """Clone the aiRBM instance.
+        """Clone the annaRBM instance.
 
         Args:
             device (Optional[torch.device], optional): Device. Defaults to None.
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            aiRBM: aiRBM instance cloned.
+            annaRBM: annaRBM instance cloned.
         """
         return super().clone(device, dtype)
     
@@ -61,7 +61,7 @@ class aiRBMbin(aiRBM):
         filename: str,
         num_updates: int,
     ) -> None:
-        """Save the parameters of the aiRBM.
+        """Save the parameters of the annaRBM.
 
         Args:
             filename (str): Path to the h5 archive where to store the model.
@@ -78,7 +78,7 @@ class aiRBMbin(aiRBM):
         dtype: torch.dtype = torch.float32,
         set_rng_state: bool = False,
     ) -> None:
-        """Loads the parameters of the aiRBM.
+        """Loads the parameters of the annaRBM.
 
         Args:
             filename (str): Path to the h5 archive.
@@ -218,7 +218,7 @@ class aiRBMbin(aiRBM):
         beta: float = 1.0,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
-        """Samples from the binary aiRBM.
+        """Samples from the binary annaRBM.
 
         Args:
             gibbs_steps (int): Number of Gibbs steps.
@@ -394,7 +394,7 @@ class aiRBMbin(aiRBM):
     
     
     def logZ0(self) -> float:
-        """Computes the initial log partition function for the aiRBM.
+        """Computes the initial log partition function for the annaRBM.
 
         Returns:
             float: Initial log partition function.
