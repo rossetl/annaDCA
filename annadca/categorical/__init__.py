@@ -2,13 +2,24 @@ from typing import Optional, Dict, Self
 import numpy as np
 
 import torch
-from adabmDCA.fasta_utils import import_from_fasta, get_tokens, encode_sequence
+from adabmDCA.fasta_utils import import_from_fasta, get_tokens
 from adabmDCA.functional import one_hot
 
 from annadca.classes import annaRBM
 from annadca.io import _save_chains
-from annadca.categorical.statmech import _compute_energy, _compute_energy_visibles, _compute_energy_hiddens
-from annadca.categorical.sampling import _sample, _sample_hiddens, _sample_visibles, _sample_labels
+from annadca.categorical.statmech import (
+    _compute_energy,
+    _compute_energy_visibles,
+    _compute_energy_hiddens,
+)
+from annadca.categorical.sampling import (
+    _sample,
+    _sample_hiddens,
+    _sample_visibles,
+    _sample_labels,
+    _sample_conditioned,
+    _predict_labels,
+)
 from annadca.categorical.init import _init_parameters, _init_chains
 from annadca.categorical.grad import _compute_gradient
 
@@ -234,17 +245,124 @@ class annaRBMcat(annaRBM):
         return {"visible": v, "hidden": h, "label": l}
     
     
-    def init_chains(self, num_samples: int) -> Dict[str, torch.Tensor]:
-        """Initialize a Markov chain for the RBM by sampling a uniform distribution on the visible layer and the labels
-        and sampling the hidden layer according to the visible one.
+    def sample_conditioned(
+        self,
+        gibbs_steps: int,
+        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
+        targets: torch.Tensor | np.ndarray,
+        beta: float = 1.0,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Samples from the annaRBM conditioned on the target labels. During the sampling, the labels are kept fixed
+        and the visible and hidden units are sampled alternatively. The visible's conditional probability distribution
+        is returned.
+
+        Args:
+            gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
+            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
+                instance or a torch.Tensor (np.ndarray) representing the visible units.
+            targets (torch.Tensor | np.ndarray): Target labels.
+            beta (float, optional): Inverse temperature. Defaults to 1.0.
+
+        Returns:
+            torch.Tensor: Conditional probability distribution of the visible units.
+        """
+        if isinstance(chains, dict):
+            visible = chains["visible"]
+        elif isinstance(chains, torch.Tensor):
+            visible = chains
+        elif isinstance(chains, np.ndarray):
+            visible = torch.tensor(chains, device=self.device, dtype=self.dtype)
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets, device=self.device, dtype=self.dtype)
+        elif isinstance(targets, torch.Tensor):
+            targets = targets.to(self.device, dtype=self.dtype)
+        if len(targets) != len(visible):
+            raise ValueError(f"The number of targets ({len(targets)}) and chains ({len(visible)}) must be the same.")
+        
+        p_visible = _sample_conditioned(
+            gibbs_steps=gibbs_steps,
+            label=targets,
+            visible=visible,
+            params=self.params,
+            beta=beta,
+        )
+
+        return p_visible
+    
+    
+    def predict_labels(
+        self,
+        gibbs_steps: int,
+        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
+        targets: torch.Tensor | np.ndarray,
+        beta: float = 1.0,
+        **kwargs,
+    ) -> Dict[str, torch.Tensor]:
+        """Samples from the annaRBM conditioned on the target visible units. During the sampling, the visibles are kept fixed
+        and the labels and hidden units are sampled alternatively. The label's conditional probability distribution is returned.
+
+        Args:
+            gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
+            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
+                instance or a torch.Tensor (np.ndarray) representing the labels.
+            targets (torch.Tensor | np.ndarray): Target visible units.
+            beta (float, optional): Inverse temperature. Defaults to 1.0.
+
+        Returns:
+            Dict[str, torch.Tensor]: Labels's probability distribution.
+        """
+        if isinstance(chains, dict):
+            label = chains["label"]
+        elif isinstance(chains, torch.Tensor):
+            label = chains
+        elif isinstance(chains, np.ndarray):
+            label = torch.tensor(chains, device=self.device, dtype=self.dtype)
+        if isinstance(targets, np.ndarray):
+            targets = torch.tensor(targets, device=self.device, dtype=self.dtype)
+        elif isinstance(targets, torch.Tensor):
+            targets = targets.to(self.device, dtype=self.dtype)
+        if len(targets) != len(label):
+            raise ValueError(f"The number of targets ({len(targets)}) and chains ({len(label)}) must be the same.")
+        
+        p_labels = _predict_labels(
+            gibbs_steps=gibbs_steps,
+            visible=targets,
+            label=label,
+            params=self.params,
+            beta=beta,            
+        )
+        
+        return p_labels
+    
+    
+    def init_chains(
+        self,
+        num_samples: int,
+        use_profile: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Initialize the Markov chains for the RBM by sampling a uniform distribution on the visible layer and the labels
+    and sampling the hidden layer according to the visible one. If use_profile is True, the visible units and the label
+    are sampled from the profile model using the local fields.
 
         Args:
             num_samples (int): Number of parallel chains.
+            use_profile (bool, optional): Whether to use the profile model. Defaults to False.
     
         Returns:
             Dict[str, torch.Tensor]: Initial Markov chain.
         """
-        return _init_chains(num_samples, self.num_states(), self.params)
+        chains = _init_chains(
+            num_samples=num_samples,
+            num_states=self.num_states(),
+            params=self.params,
+            use_profile=use_profile,
+        )
+        chains = self.sample(
+            gibbs_steps=10,
+            **chains,
+        )
+        return chains
     
     
     @staticmethod
@@ -292,13 +410,12 @@ class annaRBMcat(annaRBM):
             Dict[str, torch.Tensor]: Visible and hidden units and labels of the chains.
         """
         tokens = get_tokens(alphabet)
-        headers, sequences = import_from_fasta(filename, tokens)
-        label = np.vectorize(lambda x: np.array([int(i) for i in x]))(headers)
-        visible = encode_sequence(sequences, tokens)
+        headers, visible = import_from_fasta(filename, tokens)
+        label = np.vectorize(lambda x: np.array([int(i) for i in x]), signature="() -> (l)")(headers)
         label = torch.tensor(label, device=device, dtype=dtype)
         visible = one_hot(torch.tensor(visible), len(tokens)).to(device=device, dtype=dtype)
         if self.params is not None:
-            hidden, _ = self.sample_hiddens(visible, label)
+            hidden = self.sample_hiddens(visible, label)["hidden"]
         else:
             hidden = None
 
@@ -311,6 +428,7 @@ class annaRBMcat(annaRBM):
         chains: Dict[str, torch.Tensor],
         pseudo_count: float = 0.0,
         centered: bool = True,
+        eta: float = 1.0,
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it.
 
@@ -319,6 +437,7 @@ class annaRBMcat(annaRBM):
             chains (Dict[str, torch.Tensor]): Chains.
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
             centered (bool, optional): Centered gradient. Defaults to True.
+            eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
         """
         _compute_gradient(
             data=data,
@@ -326,7 +445,13 @@ class annaRBMcat(annaRBM):
             params=self.params,
             pseudo_count=pseudo_count,
             centered=centered,
+            eta=eta,
         )
+        
+    
+    def zerosum_gauge(self) -> None:
+        """Applies the zero-sum gauge to the weight matrix of the model."""
+        self.params["weight_matrix"] -= self.params["weight_matrix"].mean(1, keepdim=True)
         
     
     def init_parameters(

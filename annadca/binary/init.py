@@ -56,27 +56,37 @@ def _init_parameters(
 def _init_chains(
     num_samples: int,
     params: Dict[str, torch.Tensor],
+    use_profile: bool = False,
 ) -> Dict[str, torch.Tensor]:
-    """Initialize a Markov chain for the RBM by sampling a uniform distribution on the visible layer and the labels
-    and sampling the hidden layer according to the visible one.
+    """Initialize the Markov chains for the RBM by sampling a uniform distribution on the visible layer and the labels
+    and sampling the hidden layer according to the visible one. If use_profile is True, the visible units and the label
+    are sampled from the profile model using the local fields.
 
     Args:
         num_samples (int): Number of parallel chains.
         params (Dict[str, torch.Tensor]): Parameters of the model.
+        use_profile (bool, optional): Whether to use the profile model. Defaults to False.
 
     Returns:
         Dict[str, torch.Tensor]: Initial Markov chain.
     """
     num_visibles = len(params["vbias"])
     num_labels = len(params["lbias"])
-    mv = torch.ones(
-        size=(num_samples, num_visibles),
-        device=params["vbias"].device,
-        dtype=params["vbias"].dtype) / 2
-    ml = torch.ones(
-        size=(num_samples, num_labels),
-        device=params["lbias"].device,
-        dtype=params["lbias"].dtype) / 2
+    
+    if use_profile:
+        mv = torch.sigmoid(params["vbias"]).repeat(num_samples, 1)
+        ml = torch.sigmoid(params["lbias"]).repeat(num_samples, 1)
+        
+    else:
+        mv = torch.ones(
+            size=(num_samples, num_visibles),
+            device=params["vbias"].device,
+            dtype=params["vbias"].dtype) / 2
+        ml = torch.ones(
+            size=(num_samples, num_labels),
+            device=params["lbias"].device,
+            dtype=params["lbias"].dtype) / 2
+        
     visible = torch.bernoulli(mv)
     label = torch.bernoulli(ml)
     

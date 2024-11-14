@@ -4,10 +4,10 @@ import numpy as np
 from tqdm import tqdm
 from itertools import cycle
 import time
+import warnings
 
 import torch
 from torch.optim import SGD
-from torch.nn.functional import one_hot
 from adabmDCA.utils import get_device
 from adabmDCA.fasta_utils import get_tokens
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
@@ -49,8 +49,12 @@ if __name__ == '__main__':
     print(f"Output folder:\t\t{args.output}")
     print(f"Number of hidden units:\t{args.hidden}")
     print(f"Learning rate:\t\t{args.lr}")
+    print(f"Minibatch size:\t\t{args.nchains}")
+    print(f"Number of chains:\t{args.nchains}")
     print(f"Number of Gibbs Steps:\t{args.gibbs_steps}")
     print(f"Number of epochs:\t{args.nepochs}")
+    print(f"Centered gradient:\t{not args.uncentered}")
+    print(f"Labels contribution:\t{args.eta}")
     if args.pseudocount is not None:
         print(f"Pseudocount:\t\t{args.pseudocount}")
     print(f"Random seed:\t\t{args.seed}")
@@ -149,8 +153,8 @@ if __name__ == '__main__':
             num_hiddens=num_hiddens,
             num_labels=num_labels,
             num_states=num_states,
-            frequencies_visibles=frequences_visible,
-            frequencies_labels=frequency_labels,
+            frequencies_visibles=None,#frequences_visible,
+            frequencies_labels=None,#frequency_labels,
             std_init=1e-4,
             device=device,
             dtype=args.dtype,
@@ -164,7 +168,10 @@ if __name__ == '__main__':
             alphabet=tokens,
         )
     else:
-        chains = rbm.init_chains(num_samples=args.nchains)
+        if args.nchains >= dataset.__len__():
+            args.nchains = dataset.__len__()
+            warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
+        chains = rbm.init_chains(num_samples=args.nchains, use_profile=True)
         
     print("\n")
     # Save the hyperparameters of the model
@@ -179,9 +186,12 @@ if __name__ == '__main__':
         f.write(template.format("alphabet:", dataset.alphabet))
         f.write(template.format("# hiddens:", args.hidden))
         f.write(template.format("nchains:", args.nchains))
+        f.write(template.format("minibatch size:", args.nchains))
         f.write(template.format("gibbs steps:", args.gibbs_steps))
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
+        f.write(template.format("centered:", not args.uncentered))
+        f.write(template.format("eta:", args.eta))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
         template = "{0:10} {1:10}\n"
@@ -201,6 +211,7 @@ if __name__ == '__main__':
         shuffle=True,
         drop_last=True,
     )
+    
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
     dataloader = cycle(dataloader)
     
@@ -224,11 +235,15 @@ if __name__ == '__main__':
                 chains=chains,
                 gibbs_steps=args.gibbs_steps,
                 pseudo_count=args.pseudocount,
-                centered=args.centered,
+                centered=(not args.uncentered),
+                eta=args.eta,
             )
 
             # Update the parameters
             optimizer.step()
+            
+            # Set the gauge of the weights
+            rbm.zerosum_gauge()
 
             if upd % 1000 == 0:
                 rbm.save(

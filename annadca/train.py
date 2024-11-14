@@ -11,6 +11,7 @@ def pcd(
     gibbs_steps: int,
     pseudo_count: float = 0.0,
     centered: bool = True,
+    eta: float = 1.0,
 ) -> Dict[str, torch.Tensor]:
     """Computes the gradient of the parameters of the model and the Markov chains using the Persistent Contrastive Divergence algorithm.
 
@@ -21,6 +22,7 @@ def pcd(
         gibbs_steps (int): Number of Alternating Gibbs Sampling steps.
         pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         centered (bool, optional): Whether to use centered gradients. Defaults to True.
+        eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
 
     Returns:
         Dict[str, torch.Tensor]: Updated chains.
@@ -34,6 +36,7 @@ def pcd(
         chains=chains,
         pseudo_count=pseudo_count,
         centered=centered,
+        eta=eta,
     )
     
     # Update the persistent chains

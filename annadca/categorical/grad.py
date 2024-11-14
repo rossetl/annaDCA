@@ -12,6 +12,7 @@ def _compute_gradient(
     params: Dict[str, torch.Tensor],
     pseudo_count: float = 0.0,
     centered: bool = True,
+    eta: float = 1.0,
 ) -> None:
     """Computes the gradient of the Log-Likelihood for the binary annaRBM.
 
@@ -21,6 +22,7 @@ def _compute_gradient(
         params (Dict[str, torch.Tensor]): Parameters of the model.
         pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         centered (bool, optional): Whether to use centered gradients. Defaults to True.
+        eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
     """
     # Normalize the weights
     data["weight"] = data["weight"] / data["weight"].sum()
@@ -72,8 +74,8 @@ def _compute_gradient(
         
     # Attach the gradients to the parameters
     params["weight_matrix"].grad.set_(grad_weight_matrix)
+    params["label_matrix"].grad.set_(eta * grad_label_matrix)
     params["vbias"].grad.set_(grad_vbias)
     params["hbias"].grad.set_(grad_hbias)
-    params["label_matrix"].grad.set_(grad_label_matrix)
-    params["lbias"].grad.set_(grad_lbias)
+    params["lbias"].grad.set_(eta * grad_lbias)
         

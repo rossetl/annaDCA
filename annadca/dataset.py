@@ -27,20 +27,21 @@ class annaDataset(ABC, Dataset):
     def __init__(
         self,
         path_labels: Union[str, Path],
+        names: np.ndarray | list,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
         """Initialize the dataset.
 
         Args:
-            path_data (Union[str, Path]): Path to multi sequence alignment in fasta format.
-            path_weights (Union[str, Path], optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             path_labels (Union[str, Path]): Path to the file containing the labels of the sequences.
+            names (np.ndarray | list): Names of the sequences.
             device (torch.device, optional): Device to be used. Defaults to "cpu".
             dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
         self.device = device
         self.dtype = dtype
+        self.names = np.array(names)
         
         # Import the labels
         labels_dict_list = []
@@ -54,7 +55,7 @@ class annaDataset(ABC, Dataset):
         for labels_dict in labels_dict_list:
             sorted_labels_dict_list.append({k: labels_dict[k] for k in self.names})
             
-        self.label_to_idx, self.labels_one_hot = _parse_labels(labels_dict_list)
+        self.label_to_idx, self.labels_one_hot = _parse_labels(sorted_labels_dict_list)
         self.idx_to_label = {v: k for k, v in self.label_to_idx.items()}
         self.labels_one_hot = torch.tensor(self.labels_one_hot, dtype=torch.float32, device=device)
 
@@ -69,20 +70,20 @@ class annaDataset(ABC, Dataset):
     @abstractmethod
     def to_label(
         self,
-        labels: torch.Tensor,
+        labels: torch.Tensor | np.ndarray | list,
     ) -> torch.Tensor:
         """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
         
         Args:
-            labels (torch.Tensor): One-hot encoded labels or their magnetizations.
+            labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their magnetizations.
             
         Returns:
             torch.Tensor: Original labels.
         """
-        return np.vectorize(
-            lambda x: self.idx_to_label[np.argmax(x).item()],
-            signature="(l) -> ()",
-            )(labels.cpu().numpy())
+        if isinstance(labels, torch.Tensor):
+            labels = labels.cpu().numpy()
+            
+        return np.array([self.idx_to_label[np.argmax(l).item()] for l in labels])
 
     @abstractmethod
     def get_num_residues(self) -> int:
@@ -127,7 +128,7 @@ class DatasetCat(DatasetDCA, annaDataset):
             device (torch.device, optional): Device to be used. Defaults to "cpu".
         """
         DatasetDCA.__init__(self, path_data, path_weights, alphabet, device)
-        annaDataset.__init__(self, path_labels, device, dtype)
+        annaDataset.__init__(self, path_labels, self.names, device, dtype)
         
         # Move data to device
         self.num_states = self.get_num_states()
@@ -207,6 +208,7 @@ class DatasetCat(DatasetDCA, annaDataset):
         """
         perm = torch.randperm(len(self.data))
         self.data = self.data[perm]
+        self.data_one_hot = self.data_one_hot[perm]
         self.names = self.names[perm]
         self.weights = self.weights[perm]
         self.labels_one_hot = self.labels_one_hot[perm]
@@ -247,12 +249,11 @@ class DatasetBin(annaDataset):
                 device=device,
             ).view(-1, 1)
         else:
-            #self.weights = compute_weights(self.data, device=device).to(dtype).view(-1, 1)
             self.weights = torch.ones(len(self.data), 1, dtype=dtype, device=device).view(-1, 1)
         self.alphabet = get_tokens("01")
         
         # Import the labels
-        annaDataset.__init__(self, path_labels, device=device, dtype=dtype)
+        annaDataset.__init__(self, path_labels, self.names, device=device, dtype=dtype)
         print(f"Dataset imported: M = {self.data.shape[0]}, L = {self.data.shape[1]}, M_eff = {int(self.weights.sum())}.")
    
         

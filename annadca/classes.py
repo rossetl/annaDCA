@@ -1,10 +1,10 @@
 from typing import Optional, Self, Dict
 from abc import ABC, abstractmethod
+import numpy as np
+import torch
 
 from annadca.dataset import annaDataset
 from annadca.io import _save_model, _load_model
-
-import torch
         
         
 class annaRBM(ABC):
@@ -119,6 +119,8 @@ class annaRBM(ABC):
             index=index,
             set_rng_state=set_rng_state,
         )
+        self.device = device
+        self.dtype = dtype
     
     
     @abstractmethod
@@ -256,7 +258,56 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Sampled visible, hidden and label units.
         """
         pass
+    
+    
+    @abstractmethod
+    def sample_conditioned(
+        self,
+        gibbs_steps: int,
+        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
+        targets: torch.Tensor | np.ndarray,
+        beta: float = 1.0,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Samples from the annaRBM conditioned on the target labels. During the sampling, the labels are kept fixed
+        and the visible and hidden units are sampled alternatively. The visible's conditional probability distribution
+        is returned.
+
+        Args:
+            gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
+            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
+                instance or a torch.Tensor (np.ndarray) representing the visible units.
+            targets (torch.Tensor | np.ndarray): Target labels.
+            beta (float, optional): Inverse temperature. Defaults to 1.0.
+
+        Returns:
+            torch.Tensor: Conditional probability distribution of the visible units.
+        """
         
+        
+    def predict_labels(
+        self,
+        gibbs_steps: int,
+        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
+        targets: torch.Tensor | np.ndarray,
+        beta: float = 1.0,
+        **kwargs,
+    ) -> Dict[str, torch.Tensor]:
+        """Samples from the annaRBM conditioned on the target visible units. During the sampling, the visibles are kept fixed
+        and the labels and hidden units are sampled alternatively. The label's conditional probability distribution is returned.
+
+        Args:
+            gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
+            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
+                instance or a torch.Tensor (np.ndarray) representing the labels.
+            targets (torch.Tensor | np.ndarray): Target visible units.
+            beta (float, optional): Inverse temperature. Defaults to 1.0.
+
+        Returns:
+            Dict[str, torch.Tensor]: Labels's probability distribution.
+        """
+        pass
+
 
     @abstractmethod
     def init_chains(
