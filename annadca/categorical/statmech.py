@@ -10,25 +10,14 @@ def _compute_energy(
     params: Dict[str, torch.Tensor],
     **kwargs,
 ) -> torch.Tensor:
-    """Computes the energy of the model on the given configuration.
 
-    Args:
-        visible (torch.Tensor): Visible units.
-        hidden (torch.Tensor): Hidden units.
-        label (torch.Tensor): Labels.
-        params (Dict[str, torch.Tensor]): Parameters of the model.
-
-    Returns:
-        torch.Tensor: Energy of the model on the given configuration.
-    """
     def _compute_energy_chain(
         visible: torch.Tensor,
         hidden: torch.Tensor,
         label: torch.Tensor,
         params: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Computes the energy of a single chain.
-        """
+
         num_visibles, num_states, num_hiddens = params["weight_matrix"].shape
         weight_matrix_oh = params["weight_matrix"].view(num_visibles * num_states, num_hiddens)
         vbias_oh = params["vbias"].view(-1)
@@ -46,24 +35,14 @@ def _compute_energy_visibles(
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
 ) -> torch.Tensor:
-    """Returns the energy of the model computed on the input visibles and labels.
 
-    Args:
-        visible (torch.Tensor): Visible units.
-        label (torch.Tensor): Labels.
-        params (Dict[str, torch.Tensor]): Parameters of the RBM.
-
-    Returns:
-        torch.Tensor: Energy of the data points.
-    """
     @torch.jit.script
     def _compute_energy_chain(
         visible: torch.Tensor,
         label: torch.Tensor,
         params: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Computes the energy of a single chain.
-        """
+
         num_visibles, num_states, num_hiddens = params["weight_matrix"].shape
         weight_matrix_oh = params["weight_matrix"].view(num_visibles * num_states, num_hiddens)
         vbias_oh = params["vbias"].view(-1)
@@ -81,24 +60,13 @@ def _compute_energy_hiddens(
     hidden: torch.Tensor,
     params: Dict[str, torch.Tensor],
 ) -> torch.Tensor:
-    """Computes the energy of the model on the hidden layer.
-
-    Args:
-        hidden (torch.Tensor): Hidden units.
-        params (Dict[str, torch.Tensor]): Parameters of the model.
-
-    Returns:
-        torch.Tensor: Energy of the model on the hidden layer.
-    """
-    warnings.warn("This function needs to be tested for categorical variables.", UserWarning)
     
+    warnings.warn("This function needs to be tested for categorical variables.", UserWarning)
     @torch.jit.script
     def _compute_energy_chain(
         hidden: torch.Tensor,
         params: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Computes the energy of a single chain.
-        """
         num_visibles, num_states, num_hiddens = params["weight_matrix"].shape
         weight_matrix_oh = params["weight_matrix"].view(num_visibles * num_states, num_hiddens)
         vbias_oh = params["vbias"].view(-1)
@@ -109,6 +77,38 @@ def _compute_energy_hiddens(
         field = hidden @ params["hbias"]
         exponent = eff_bias + (hidden @ eff_weight_matrix.T)
         log_term = torch.where(exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent)
-        return -field - log_term.sum()
+        return - field - log_term.sum()
     
     return torch.vmap(_compute_energy_chain, in_dims=(0, None))(hidden, params)
+
+
+def _update_weights_AIS(
+    prev_params: Dict[str, torch.Tensor],
+    curr_params: Dict[str, torch.Tensor],
+    chains: Dict[str, torch.Tensor],
+    log_weights: torch.Tensor,
+) -> torch.Tensor:
+
+    energy_prev = _compute_energy(**chains, params=prev_params)
+    energy_curr = _compute_energy(**chains, params=curr_params)
+    log_weights += energy_prev - energy_curr
+    
+    return log_weights
+
+
+def _compute_log_likelihood(
+    visible: torch.Tensor,
+    label: torch.Tensor,
+    weight: torch.Tensor,
+    params: Dict[str, torch.Tensor],
+    logZ: float,
+) -> float:
+    
+    energy_data = _compute_energy_visibles(
+        visible=visible,
+        label=label,
+        params=params,
+    )
+    mean_energy_data = (energy_data * weight.view(-1)).sum() / weight.sum()
+    
+    return - mean_energy_data - logZ

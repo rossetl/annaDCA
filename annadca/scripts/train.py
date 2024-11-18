@@ -54,6 +54,7 @@ if __name__ == '__main__':
     print(f"Number of Gibbs Steps:\t{args.gibbs_steps}")
     print(f"Number of epochs:\t{args.nepochs}")
     print(f"Centered gradient:\t{not args.uncentered}")
+    print(f"Profile initialization:\t{args.init_from_profile}")
     print(f"Labels contribution:\t{args.eta}")
     if args.pseudocount is not None:
         print(f"Pseudocount:\t\t{args.pseudocount}")
@@ -122,15 +123,17 @@ if __name__ == '__main__':
     num_states = dataset.get_num_states()
     if isinstance(dataset, DatasetBin):
         rbm = annaRBMbin()
+        data = dataset.data
         frequences_visible = get_freq_single_point_bin(
-            data=dataset.data,
+            data=data,
             weights=dataset.weights,
             pseudo_count=args.pseudocount,
         )
     elif isinstance(dataset, DatasetCat):
         rbm = annaRBMcat()
+        data = dataset.data_one_hot
         frequences_visible = get_freq_single_point_cat(
-            data=dataset.data_one_hot,
+            data=data,
             weights=dataset.weights,
             pseudo_count=args.pseudocount,
         )
@@ -148,13 +151,20 @@ if __name__ == '__main__':
         )
         
     else:
+        if args.init_from_profile:
+            init_frequences_visible = frequences_visible
+            init_frequences_labels = frequency_labels
+        else:
+            init_frequences_visible = None
+            init_frequences_labels = None
+            
         rbm.init_parameters(
             num_visibles=num_visibles,
             num_hiddens=num_hiddens,
             num_labels=num_labels,
             num_states=num_states,
-            frequencies_visibles=None,#frequences_visible,
-            frequencies_labels=None,#frequency_labels,
+            frequencies_visibles=init_frequences_visible,
+            frequencies_labels=init_frequences_labels,
             std_init=1e-4,
             device=device,
             dtype=args.dtype,
@@ -191,6 +201,7 @@ if __name__ == '__main__':
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
         f.write(template.format("centered:", not args.uncentered))
+        f.write(template.format("profile init:", args.init_from_profile))
         f.write(template.format("eta:", args.eta))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
@@ -215,14 +226,24 @@ if __name__ == '__main__':
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
     dataloader = cycle(dataloader)
     
+    # Initialize the variables for the log-likelihood estimation
+    logZ = rbm.logZ0()
+    log_weights = torch.zeros(args.nchains, device=device, dtype=args.dtype)
+    log_likelihood = rbm.compute_log_likelihood(
+        visible=data,
+        label=dataset.labels_one_hot,
+        weight=dataset.weights,
+        logZ=logZ,
+    )
+    
     # Train the model
     start = time.time()
     pbar = tqdm(initial=0, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
     upd = 0
     with torch.no_grad():
         while upd < args.nepochs:
-            upd += 1
             
+            upd += 1
             if upd % 10 == 0:
                 pbar.update(10)
 

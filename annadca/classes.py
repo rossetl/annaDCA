@@ -17,7 +17,7 @@ class annaRBM(ABC):
         dtype: Optional[torch.dtype] = torch.float32,
     ):
         if params is not None:
-            self.params = {params[k].to(device=device, dtype=dtype) for k in params}
+            self.params = {k : params[k].to(device=device, dtype=dtype) for k in params.keys()}
         else:
             self.params = None
 
@@ -305,6 +305,46 @@ class annaRBM(ABC):
 
         Returns:
             Dict[str, torch.Tensor]: Labels's probability distribution.
+        """
+        pass
+    
+    @abstractmethod
+    def update_weights_AIS(
+        self,
+        prev_model: Self,
+        chains: Dict[str, torch.Tensor],
+        log_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Update the weights used during the trajectory Annealed Importance Sampling (AIS) algorithm.
+
+        Args:
+            prev_model (annRBM): Model at time t-1.
+            chains (torch.Tensor): Chains at time t-1.
+            log_weights (torch.Tensor): Log-weights at time t-1.
+
+        Returns:
+            torch.Tensor: Log-weights at time t.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def compute_log_likelihood(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+        logZ: float,
+        **kwargs,
+    ) -> float:
+        """Computes the log-likelihood of the model on the given configuration.
+
+        Args:
+            visible (torch.Tensor): Visible units.
+            label (torch.Tensor): Labels.
+            logZ (float): Log partition function.
+
+        Returns:
+            float: Log-likelihood of the model on the given configuration.
         """
         pass
 

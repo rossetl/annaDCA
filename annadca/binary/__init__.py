@@ -10,6 +10,8 @@ from annadca.binary.statmech import (
     _compute_energy,
     _compute_energy_visibles,
     _compute_energy_hiddens,
+    _update_weights_AIS,
+    _compute_log_likelihood,
 )
 from annadca.binary.sampling import (
     _sample,
@@ -55,16 +57,27 @@ class annaRBMbin(annaRBM):
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ) -> Self:
-        """Clone the annaRBM instance.
+        """Clone the annaRBMbin instance.
 
         Args:
             device (Optional[torch.device], optional): Device. Defaults to None.
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            annaRBM: annaRBM instance cloned.
+            annaRBMbin: annaRBMbin instance cloned.
         """
-        return super().clone(device, dtype)
+        if device is None:
+            device = self.device
+        if dtype is None:
+            dtype = self.dtype
+            
+        cloned_params = {k: v.clone().to(device=device, dtype=dtype) for k, v in self.params.items()}
+            
+        return annaRBMbin(
+            params=cloned_params,
+            device=device,
+            dtype=dtype,
+        )
     
     
     def save(
@@ -333,6 +346,47 @@ class annaRBMbin(annaRBM):
         )
         
         return p_labels
+    
+    
+    def update_weights_AIS(
+        self,
+        prev_model: annaRBM,
+        chains: Dict[str, torch.Tensor],
+        log_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        """Update the weights used during the trajectory Annealed Importance Sampling (AIS) algorithm.
+
+        Args:
+            prev_model (annRBM): Model at time t-1.
+            chains (torch.Tensor): Chains at time t-1.
+            log_weights (torch.Tensor): Log-weights at time t-1.
+
+        Returns:
+            torch.Tensor: Log-weights at time t.
+        """
+        return _update_weights_AIS(prev_model.params, self.params, chains, log_weights)
+    
+    
+    def compute_log_likelihood(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+        weight: torch.Tensor,
+        logZ: float,
+        **kwargs,
+    ) -> float:
+        """Computes the log-likelihood of the model on the given configuration.
+
+        Args:
+            visible (torch.Tensor): Visible units.
+            label (torch.Tensor): Labels.
+            weight (torch.Tensor): weights of the sequences.
+            logZ (float): Log partition function.
+
+        Returns:
+            float: Log-likelihood of the model on the given configuration.
+        """
+        return _compute_log_likelihood(visible, label, weight, self.params, logZ)
     
     
     def init_chains(
