@@ -65,7 +65,7 @@ if __name__ == '__main__':
     print("Importing dataset...")
     dataset = get_dataset(
         path_data=args.data,
-        path_labels=args.annotations,
+        path_ann=args.annotations,
         path_weights=args.weights,
         alphabet=args.alphabet,
         device=device,
