@@ -12,7 +12,7 @@ def _get_freq_single_point(
     else:
         norm_weights = torch.ones((M, 1), device=data.device) / M
 
-    frequencies = (data.float() * norm_weights).sum(dim=0)
+    frequencies = (data * norm_weights).sum(dim=0)
 
     return (1. - pseudo_count) * frequencies + (pseudo_count / 2)
 

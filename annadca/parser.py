@@ -2,11 +2,11 @@ import argparse
 from pathlib import Path
 
 def add_args_train(parser : argparse.ArgumentParser) -> argparse.ArgumentParser:
-    dca_args = parser.add_argument_group("Training an aiRBM model.")
-    dca_args.add_argument("-d", "--data",         type=Path,  required=True,          help="Filename of the dataset to be used for training the model.")
-    dca_args.add_argument("-o", "--output",       type=Path,  default="aiRBM_model",  help="(Defaults to aiRBM_model). Path to the folder where to save the model.")
-    dca_args.add_argument("-a", "--annotations",  type=Path,  required=True,          help="Path to the file containing the annotations of the sequences.")
-    dca_args.add_argument("-H", "--hidden",       type=int,   default=100,            help="(Defaults to 100). Number of hidden units.")
+    dca_args = parser.add_argument_group("Training an annaRBM model.")
+    dca_args.add_argument("-d", "--data",         type=Path,  required=True,        help="Filename of the dataset to be used for training the model.")
+    dca_args.add_argument("-o", "--output",       type=Path,  default="annaRBM",    help="(Defaults to annaRBM). Path to the folder where to save the model.")
+    dca_args.add_argument("-a", "--annotations",  type=Path,  required=True,        help="Path to the file containing the annotations of the sequences.")
+    dca_args.add_argument("-H", "--hidden",       type=int,   default=100,          help="(Defaults to 100). Number of hidden units.")
     # Optional arguments
     dca_args.add_argument("-w", "--weights",      type=Path,  default=None,         help="(Defaults to None). Path to the file containing the weights of the sequences. If None, the weights are computed automatically.")
     dca_args.add_argument("-p", "--path_params",  type=Path,  default=None,         help="(Defaults to None) Path to the file containing the model's parameters. Required for restoring the training.")
