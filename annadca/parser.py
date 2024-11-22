@@ -21,6 +21,7 @@ def add_args_train(parser : argparse.ArgumentParser) -> argparse.ArgumentParser:
     dca_args.add_argument("--eta",                type=float, default=1.0,          help="(Defaults to 1.0). Relative contribution of the label term.")
     dca_args.add_argument("--uncentered",         action="store_true",              help="(Defaults to False). If specified, the uncentered version of the gradient is used.")
     dca_args.add_argument("--init_from_profile",  action="store_true",              help="(Defaults to False). If specified, the biases are initialized using the independent-site model.")
+    dca_args.add_argument("--use_weights",        action="store_true",              help="(Defaults to False). If specified, the weights of the sequences are used in the training.")
     dca_args.add_argument("--seed",               type=int,   default=0,            help="(Defaults to 0). Seed for the random number generator.")
     dca_args.add_argument("--device",             type=str,   default="cuda",       help="(Defaults to cuda). Device to be used.")
     dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float32", "float64"])
