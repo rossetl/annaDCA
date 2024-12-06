@@ -12,9 +12,6 @@ setup(
     url='https://github.com/rossetl/annaDCA',
     packages=find_packages(include=['annadca', 'annadca.*']),
     include_package_data=True,
-    package_data={
-        "annadca": ["*.sh"],  # Include all `.sh` files in the `annadca` package
-    },
     python_requires='>=3.10',
     classifiers=[
         'Programming Language :: Python :: 3',
@@ -27,11 +24,6 @@ setup(
         ],
     },
     install_requires=[
-        'matplotlib==3.9.2',
-        'numpy==2.1.3',
-        'pandas==2.2.3',
-        'torch==2.5.1',
-        'tqdm==4.67.0',
-        'adabmDCA==0.1.5'
+        'adabmDCA==0.2.6'
     ],
 )

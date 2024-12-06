@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from torch.utils.data import Dataset, DataLoader
 import torch
 from adabmDCA.dataset import DatasetDCA
-from adabmDCA.fasta_utils import get_tokens
+from adabmDCA.fasta import get_tokens
 from adabmDCA.functional import one_hot
 
 from annadca.utils import _parse_labels, _complete_labels
@@ -142,7 +142,12 @@ class DatasetCat(DatasetDCA, annaDataset):
             device (torch.device, optional): Device to be used. Defaults to "cpu".
         """
         annaDataset.__init__(self, path_ann, device, dtype)
-        DatasetDCA.__init__(self, path_data, path_weights, alphabet, device)
+        DatasetDCA.__init__(
+            self,
+            path_data=path_data,
+            path_weights=path_weights,
+            alphabet=alphabet,
+            device=device)
         
         # Parse the labels
         annaDataset.parse_labels(self, self.names)

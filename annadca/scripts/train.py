@@ -9,13 +9,12 @@ import warnings
 import torch
 from torch.optim import SGD
 from adabmDCA.utils import get_device
-from adabmDCA.fasta_utils import get_tokens
+from adabmDCA.fasta import get_tokens
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
 
 from annadca.parser import add_args_train
 from annadca.dataset import DatasetBin, DatasetCat, get_dataset
-from annadca.binary import annaRBMbin
-from annadca.categorical import annaRBMcat
+from annadca import annaRBMbin, annaRBMcat
 from annadca.binary.stats import get_freq_single_point as get_freq_single_point_bin
 from annadca.dataset import DataLoader_shuffle as DataLoader
 from annadca.train import pcd

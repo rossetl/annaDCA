@@ -3,7 +3,7 @@ from typing import Dict
 import h5py
 import numpy as np
 import torch
-from adabmDCA.fasta_utils import write_fasta, get_tokens
+from adabmDCA.fasta import write_fasta, get_tokens
 
 from annadca.utils import get_saved_updates
 
@@ -44,7 +44,7 @@ def _load_model(
     filename: str,
     device: torch.device,
     dtype: torch.dtype,
-    index: int = None,
+    index: int | None = None,
     set_rng_state: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Loads a RBM from an h5 archive.
@@ -53,8 +53,8 @@ def _load_model(
         filename (str): Path to the h5 archive.
         device (torch.device): PyTorch device on which to load the parameters and the chains.
         dtype (torch.dtype): Dtype for the parameters and the chains.
-        index (int): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
-        set_rng_state (bool): Restore the random state at the given epoch (useful to restore training). Defaults to False.
+        index (int | None, optional): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
+        set_rng_state (bool, optional): Restore the random state at the given epoch (useful to restore training). Defaults to False.
 
     Returns:
         Dict[str, torch.Tensor]: Parameters of the loaded model.

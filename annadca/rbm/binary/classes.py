@@ -2,7 +2,7 @@ from typing import Optional, Dict, Self
 import numpy as np
 
 import torch
-from adabmDCA.fasta_utils import import_from_fasta
+from adabmDCA.fasta import import_from_fasta
 
 from annadca.classes import annaRBM
 from annadca.io import _save_chains
