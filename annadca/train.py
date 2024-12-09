@@ -31,7 +31,7 @@ def pcd(
     data_batch["hidden"] = rbm.sample_hiddens(**data_batch)["hidden_mag"]
     
     # For all data in the batch that have zero label, infer the label
-    infered_labels = rbm.sample_labels(hidden=data_batch["hidden"])["label_mag"]
+    infered_labels = rbm.sample_labels(hidden=data_batch["hidden"])["label"]
     data_batch["label"] = torch.where(torch.all(data_batch["label"] == 0, dim=1, keepdim=True), infered_labels, data_batch["label"])
     
     # Compute the gradient of the Log-Likelihood

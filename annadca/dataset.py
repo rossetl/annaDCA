@@ -1,4 +1,4 @@
-from typing import Union, Any
+from typing import Any
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from torch.utils.data import Dataset, DataLoader
 import torch
 from adabmDCA.dataset import DatasetDCA
-from adabmDCA.fasta import get_tokens
+from adabmDCA.fasta import get_tokens, compute_weights
 from adabmDCA.functional import one_hot
 
 from annadca.utils import _parse_labels, _complete_labels
@@ -26,14 +26,14 @@ class annaDataset(ABC, Dataset):
     @abstractmethod
     def __init__(
         self,
-        path_ann: Union[str, Path],
+        path_ann: str | Path,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
         """Initialize the dataset.
 
         Args:
-            path_ann (Union[str, Path]): Path to the file containing the labels of the sequences.
+            path_ann (str | Path): Path to the file containing the labels of the sequences.
             device (torch.device, optional): Device to be used. Defaults to "cpu".
             dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
@@ -127,8 +127,10 @@ class DatasetCat(DatasetDCA, annaDataset):
         self,
         path_data: str | Path,
         path_ann: str | Path,
-        path_weights: str | Path = None,
+        path_weights: str | Path | None = None,
         alphabet: str = "protein",
+        clustering_th: float = 0.8,
+        no_reweighting: bool = True,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
@@ -136,18 +138,30 @@ class DatasetCat(DatasetDCA, annaDataset):
 
         Args:
             path_data (str | Path): Path to multi sequence alignment in fasta format.
-            path_ann (str | Path): Path to the file containing the labels of the sequences.
+            path_ann (str | Path | None): Path to the file containing the labels of the sequences.
             path_weights (str | Path, optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
             alphabet (str, optional): Selects the type of encoding of the sequences. Default choices are ("protein", "rna", "dna"). Defaults to "protein".
+            clustering_th (float, optional): Sequence identity threshold for clustering the sequences. Defaults to 0.8.
+            no_reweighting (bool, optional): If True, the sequences are not reweighted. Defaults to True.
             device (torch.device, optional): Device to be used. Defaults to "cpu".
+            dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
-        annaDataset.__init__(self, path_ann, device, dtype)
+        annaDataset.__init__(
+            self,
+            path_ann=path_ann,
+            device=device,
+            dtype=dtype,
+        )
         DatasetDCA.__init__(
             self,
             path_data=path_data,
             path_weights=path_weights,
             alphabet=alphabet,
-            device=device)
+            clustering_th=clustering_th,
+            no_reweighting=no_reweighting,
+            device=device,
+            dtype=dtype,
+        )
         
         # Parse the labels
         annaDataset.parse_labels(self, self.names)
@@ -155,11 +169,10 @@ class DatasetCat(DatasetDCA, annaDataset):
         # Move data to device
         self.num_states = self.get_num_states()
         self.data_one_hot = one_hot(
-            torch.tensor(self.data, dtype=torch.int32, device=device),
+            self.data,
             num_classes=self.num_states,
-        ).to(dtype)
-        self.weights = self.weights.to(dtype).view(-1, 1)
-        self.alphabet = get_tokens(alphabet)
+        ).to(device=device, dtype=dtype)
+        self.weights = self.weights.view(-1, 1)
 
 
     def __len__(self):
@@ -172,21 +185,6 @@ class DatasetCat(DatasetDCA, annaDataset):
             "label": self.labels_one_hot[idx],
             "weight": self.weights[idx],
         }
-        
-    
-    #def to_label(
-    #    self,
-    #    labels: torch.Tensor,
-    #) -> torch.Tensor:
-    #    """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
-    #    
-    #    Args:
-    #        labels (torch.Tensor): One-hot encoded labels or their magnetizations.
-    #        
-    #    Returns:
-    #        torch.Tensor: Original labels.
-    #    """
-    #    return annaDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -204,7 +202,7 @@ class DatasetCat(DatasetDCA, annaDataset):
         Returns:
             int: Number of states.
         """
-        return np.max(self.data) + 1
+        return DatasetDCA.get_num_states(self)
     
     
     def get_num_classes(self) -> int:
@@ -244,7 +242,9 @@ class DatasetBin(annaDataset):
         self,
         path_data: str | Path,
         path_ann: str | Path,
-        path_weights: str | Path = None,
+        path_weights: str | Path | None = None,
+        clustering_th: float = 0.8,
+        no_reweighting: bool = True,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
@@ -253,11 +253,18 @@ class DatasetBin(annaDataset):
         Args:
             path_data (str | Path): Path to the file containing the binary data.
             path_ann (str | Path): Path to the file containing the labels of the data.
-            path_weights (str | Path, optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
+            path_weights (str | Path | None, optional): Path to the file containing the importance weights of the sequences. If None, the weights are computed automatically.
+            clustering_th (float, optional): Sequence identity threshold for clustering the sequences. Defaults to 0.8.
+            no_reweighting (bool, optional): If True, the sequences are not reweighted. Defaults to True.
             device (torch.device, optional): Device to be used. Defaults to "cpu".
             dtype (torch.dtype, optional): Data type of the data. Defaults to torch.float32.
         """
-        annaDataset.__init__(self, path_ann, device=device, dtype=dtype)
+        annaDataset.__init__(
+            self,
+            path_ann=path_ann,
+            device=device,
+            dtype=dtype,
+        )
         
         self.data = torch.tensor(
             np.loadtxt(path_data),
@@ -265,15 +272,23 @@ class DatasetBin(annaDataset):
             device=device,
         )
         self.names = np.arange(len(self.data)).astype(str)
-        if path_weights is not None:
-            self.weights = torch.tensor(
-                np.loadtxt(path_weights),
-                dtype=dtype,
-                device=device,
-            ).view(-1, 1)
-        else:
+        if no_reweighting:
             self.weights = torch.ones(len(self.data), 1, dtype=dtype, device=device).view(-1, 1)
-        self.alphabet = get_tokens("01")
+        else:
+            if path_weights is not None:
+                self.weights = torch.tensor(
+                    np.loadtxt(path_weights),
+                    dtype=dtype,
+                    device=device,
+                ).view(-1, 1)
+            else:
+                self.weights = compute_weights(
+                    data=self.data,
+                    th=clustering_th,
+                    device=device,
+                    dtype=dtype,
+                ).view(-1, 1)
+        self.tokens = get_tokens("01")
         
         # parse the labels
         annaDataset.parse_labels(self, self.names)
@@ -291,21 +306,6 @@ class DatasetBin(annaDataset):
             "label": self.labels_one_hot[idx],
             "weight": self.weights[idx],
         }
-        
-
-#    def to_label(
-#        self,
-#        labels: torch.Tensor,
-#    ) -> torch.Tensor:
-#        """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
-#        
-#        Args:
-#            labels (torch.Tensor): One-hot encoded labels or their magnetizations.
-#            
-#        Returns:
-#            torch.Tensor: Original labels.
-#        """
-#        return annaDataset.to_label(self, labels)
     
     
     def get_num_residues(self) -> int:
@@ -357,8 +357,10 @@ class DatasetBin(annaDataset):
 def get_dataset(
     path_data: str | Path,
     path_ann: str | Path,
-    path_weights: str | Path = None,
+    path_weights: str | Path | None = None,
     alphabet: str = "protein",
+    clustering_th: float = 0.8,
+    no_reweighting: bool = True,
     device: torch.device = torch.device("cpu"),
     dtype: torch.dtype = torch.float32,
 ) -> annaDataset:
@@ -367,7 +369,7 @@ def get_dataset(
     Args:
         path_data (str | Path): Path to the data file.
         path_labels (str | Path): Path to the labels file.
-        path_weights (str | Path, optional): Path to the weights file. Defaults to None.
+        path_weights (str | Path | None, optional): Path to the weights file. Defaults to None.
         alphabet (str, optional): Alphabet for encoding the data. It is uneffective for binary data. Defaults to "protein".
         device (torch.device, optional): Device. Defaults to torch.device("cpu").
         dtype (torch.dtype, optional): Data type. Defaults to torch.float32.
@@ -384,6 +386,8 @@ def get_dataset(
                 path_ann=path_ann,
                 path_weights=path_weights,
                 alphabet=alphabet,
+                clustering_th=clustering_th,
+                no_reweighting=no_reweighting,
                 device=device,
                 dtype=dtype,
             )
@@ -392,6 +396,8 @@ def get_dataset(
                 path_data=path_data,
                 path_ann=path_ann,
                 path_weights=path_weights,
+                clustering_th=clustering_th,
+                no_reweighting=no_reweighting,
                 device=device,
                 dtype=dtype,
             )

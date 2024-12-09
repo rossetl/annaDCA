@@ -20,7 +20,7 @@ def plot_PCA(
     dim2: int,
     title: str,
     split_labels: bool = False,
-):
+) -> plt.figure:
     """Plot the scatter plot of data1 and data2 in the space defined by the (dim1, dim2) principal components.
     Also plots the histograms projected along the x and y axes.
     
@@ -46,7 +46,7 @@ def plot_PCA(
     for label in unique_labels:
         mask1 = labels1 == label
         mask2 = labels2 == label
-        ax_scatter.scatter(data1[mask1, dim1], data1[mask1, dim2], color=label_to_color[label], s=50, zorder=0, alpha=0.3)
+        ax_scatter.scatter(data1[mask1, dim1], data1[mask1, dim2], color=label_to_color[label], s=50, zorder=0, alpha=0.3, label=label)
         if split_labels:
             _plot_hist(ax_hist_x, data1[mask1], data2[mask2], color=label_to_color[label], dim=dim1, orientation='vertical')
             _plot_hist(ax_hist_y,data1[mask1], data2[mask2], color=label_to_color[label], dim=dim2, orientation='horizontal')
@@ -63,3 +63,4 @@ def plot_PCA(
     ax_scatter.set_ylabel(f"PC {dim2 + 1}")
     
     fig.suptitle(title)
+    return fig

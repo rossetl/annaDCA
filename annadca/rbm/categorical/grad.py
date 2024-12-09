@@ -2,7 +2,7 @@ from typing import Dict
 import torch
 
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat # for categorical data
-from annadca.binary.stats import get_freq_single_point as get_freq_single_point_bin # for binary data
+from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin # for binary data
 
 
 @torch.jit.script

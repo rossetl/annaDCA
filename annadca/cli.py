@@ -23,7 +23,8 @@ def main():
             sys.exit(1)
 
     # Run the corresponding Python script with the remaining optional arguments
-    script_path = os.path.join(SCRIPT_DIR, SCRIPT)
+    REPO_SCRIPTS = os.path.join(SCRIPT_DIR, "scripts")
+    script_path = os.path.join(REPO_SCRIPTS, SCRIPT)
     proc = subprocess.call(
         [sys.executable, script_path] + sys.argv[2:],
     )

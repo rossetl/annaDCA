@@ -1,7 +1,7 @@
 from typing import Dict
 import torch
 
-from annadca.binary.stats import get_freq_single_point
+from annadca.rbm.binary.stats import get_freq_single_point
 
 
 @torch.jit.script

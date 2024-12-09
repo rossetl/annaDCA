@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Self
+from typing import Optional, Dict
 import numpy as np
 
 import torch
@@ -7,14 +7,14 @@ from adabmDCA.functional import one_hot
 
 from annadca.classes import annaRBM
 from annadca.io import _save_chains
-from annadca.categorical.statmech import (
+from annadca.rbm.categorical.statmech import (
     _compute_energy,
     _compute_energy_visibles,
     _compute_energy_hiddens,
     _update_weights_AIS,
     _compute_log_likelihood,
 )
-from annadca.categorical.sampling import (
+from annadca.rbm.categorical.sampling import (
     _sample,
     _sample_hiddens,
     _sample_visibles,
@@ -22,8 +22,8 @@ from annadca.categorical.sampling import (
     _sample_conditioned,
     _predict_labels,
 )
-from annadca.categorical.init import _init_parameters, _init_chains
-from annadca.categorical.grad import _compute_gradient
+from annadca.rbm.categorical.init import _init_parameters, _init_chains
+from annadca.rbm.categorical.grad import _compute_gradient
 
 
 class annaRBMcat(annaRBM):
@@ -40,7 +40,7 @@ class annaRBMcat(annaRBM):
         self,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ) -> Self:
+    ):
         """Moves the parameters to the specified device and/or dtype.
 
         Args:
@@ -57,7 +57,7 @@ class annaRBMcat(annaRBM):
         self,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ) -> Self:
+    ):
         """Clone the annaRBMcat instance.
 
         Args:
@@ -65,7 +65,7 @@ class annaRBMcat(annaRBM):
             dtype (Optional[torch.dtype], optional): Dtype. Defaults to None.
 
         Returns:
-            annaRBMcat: annaRBMcat instance cloned.
+            annaRBM: annaRBM instance cloned.
         """
         if device is None:
             device = self.device

@@ -8,14 +8,13 @@ import warnings
 
 import torch
 from torch.optim import SGD
-from adabmDCA.utils import get_device
-from adabmDCA.fasta import get_tokens
+from adabmDCA.utils import get_device, get_dtype
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
 
 from annadca.parser import add_args_train
 from annadca.dataset import DatasetBin, DatasetCat, get_dataset
 from annadca import annaRBMbin, annaRBMcat
-from annadca.binary.stats import get_freq_single_point as get_freq_single_point_bin
+from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
 from annadca.dataset import DataLoader_shuffle as DataLoader
 from annadca.train import pcd
 from annadca.utils import get_saved_updates
@@ -36,13 +35,9 @@ if __name__ == '__main__':
     parser = create_parser()
     args = parser.parse_args()
     
-    if args.dtype == "float32":
-        args.dtype = torch.float32
-    elif args.dtype == "float64":
-        args.dtype = torch.float64
-    
     print("\n" + "".join(["*"] * 10) + f" Training annaRBM model " + "".join(["*"] * 10) + "\n")
     device = get_device(args.device)
+    dtype = get_dtype(args.dtype)
     print("\n")
     print(f"Input data:\t\t{args.data}")
     print(f"Input annotations:\t{args.annotations}")
@@ -68,11 +63,13 @@ if __name__ == '__main__':
         path_ann=args.annotations,
         path_weights=args.weights,
         alphabet=args.alphabet,
+        clustering_th=args.clustering_seqid,
+        no_reweighting=args.no_reweighting,
         device=device,
-        dtype=args.dtype,
+        dtype=dtype,
     )
-    tokens = get_tokens(dataset.alphabet)
-    print(f"Alphabet: {dataset.alphabet}")
+    tokens = dataset.tokens
+    print(f"Alphabet: {dataset.tokens}")
     
     # Create the folder where to save the model
     folder = Path(args.output)
@@ -98,16 +95,15 @@ if __name__ == '__main__':
             path.unlink()
             
     # Save the weights if not already provided
-    if args.weights is None and args.use_weights:
+    if args.weights is None and not args.no_reweighting:
         if args.label is not None:
             path_weights = folder / f"{args.label}_weights.dat"
         else:
             path_weights = folder / "weights.dat"
         np.savetxt(path_weights, dataset.weights.cpu().numpy())
         print(f"Weights saved in {path_weights}")
-    elif not args.use_weights:
-        dataset.weights = torch.ones_like(dataset.weights)
-        print("All sequence weights set to 1.")
+    elif args.no_reweighting:
+        print("All sequence weights set to 1.0")
         
     # Set the random seed
     torch.manual_seed(args.seed)
@@ -150,7 +146,7 @@ if __name__ == '__main__':
         rbm.load(
             filename=args.path_params,
             device=device,
-            dtype=args.dtype,
+            dtype=dtype,
         )
         
     else:
@@ -170,14 +166,14 @@ if __name__ == '__main__':
             frequencies_labels=init_frequences_labels,
             std_init=1e-4,
             device=device,
-            dtype=args.dtype,
+            dtype=dtype,
         )
     
     if args.path_chains is not None:
         chains = rbm.load_chains(
             filename=args.path_chains,
             device=device,
-            dtype=args.dtype,
+            dtype=dtype,
             alphabet=tokens,
         )
     else:
@@ -196,7 +192,7 @@ if __name__ == '__main__':
             f.write(template.format("label:", "N/A"))
             
         f.write(template.format("input data:", str(args.data)))
-        f.write(template.format("alphabet:", dataset.alphabet))
+        f.write(template.format("alphabet:", dataset.tokens))
         f.write(template.format("# hiddens:", args.hidden))
         f.write(template.format("nchains:", args.nchains))
         f.write(template.format("minibatch size:", args.nchains))
@@ -231,7 +227,7 @@ if __name__ == '__main__':
     
     # Initialize the variables for the log-likelihood estimation
     logZ = rbm.logZ0()
-    log_weights = torch.zeros(args.nchains, device=device, dtype=args.dtype)
+    log_weights = torch.zeros(args.nchains, device=device, dtype=dtype)
     log_likelihood = rbm.compute_log_likelihood(
         visible=data,
         label=dataset.labels_one_hot,
@@ -278,7 +274,7 @@ if __name__ == '__main__':
                     filename=file_paths["chains"],
                     visible=chains["visible"],
                     label=chains["label"],
-                    alphabet=dataset.alphabet,
+                    alphabet=dataset.tokens,
                 )
                 with open(file_paths["log"], "a") as f:
                     f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
@@ -295,7 +291,7 @@ if __name__ == '__main__':
                 filename=file_paths["chains"],
                 visible=chains["visible"],
                 label=chains["label"],
-                alphabet=dataset.alphabet,
+                alphabet=dataset.tokens,
             )
             with open(file_paths["log"], "a") as f:
                 f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))

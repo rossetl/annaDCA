@@ -1,4 +1,4 @@
-from typing import Optional, Self, Dict
+from typing import Optional, Dict
 from abc import ABC, abstractmethod
 import numpy as np
 import torch
@@ -30,7 +30,7 @@ class annaRBM(ABC):
         self,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ) -> Self:
+    ):
         """Moves the parameters to the specified device and/or dtype.
 
         Args:
@@ -55,7 +55,7 @@ class annaRBM(ABC):
         self,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
-    ) -> Self:
+    ):
         """Clone the annaRBM instance.
 
         Args:
@@ -311,7 +311,7 @@ class annaRBM(ABC):
     @abstractmethod
     def update_weights_AIS(
         self,
-        prev_model: Self,
+        prev_model: "annaRBM",
         chains: Dict[str, torch.Tensor],
         log_weights: torch.Tensor,
     ) -> torch.Tensor:
@@ -429,7 +429,7 @@ class annaRBM(ABC):
         device: torch.device,
         dtype: torch.dtype,
         sigma: float = 1e-4,
-    ) -> Self:
+    ):
         """Initializes the parameters of the annaRBM.
 
         Args:
@@ -440,7 +440,7 @@ class annaRBM(ABC):
             sigma (float, optional): Standard deviation of the weight matrix. Defaults to 1e-4.
 
         Returns:
-            Self: annaRBM instance.
+            annaRBM: annaRBM instance.
         """
         pass
         

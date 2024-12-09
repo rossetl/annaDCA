@@ -130,7 +130,7 @@ def _save_chains(
         headers=headers,
         sequences=visible,
         numeric_input=True,
-        alphabet=tokens,
+        tokens=tokens,
         remove_gaps=False,
     )
 
