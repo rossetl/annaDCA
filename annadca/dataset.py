@@ -81,16 +81,20 @@ class annaDataset(ABC, Dataset):
         self,
         labels: torch.Tensor | np.ndarray | list,
     ) -> torch.Tensor:
-        """Converts the one-hot encoded labels (or their magnetizations) to the original labels.
+        """Converts the one-hot encoded labels (or their probability) to the original labels.
         
         Args:
-            labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their magnetizations.
+            labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their probability.
             
         Returns:
             torch.Tensor: Original labels.
         """
         if isinstance(labels, torch.Tensor):
             labels = labels.cpu().numpy()
+        elif isinstance(labels, list):
+            labels = np.array(labels)
+        if len(labels.shape) == 1:
+            labels = np.expand_dims(labels, axis=0)
             
         return np.array([self.idx_to_label[np.argmax(l).item()] for l in labels])
 

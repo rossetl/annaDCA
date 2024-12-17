@@ -306,42 +306,25 @@ class annaRBMcat(annaRBM):
     
     def predict_labels(
         self,
-        gibbs_steps: int,
-        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
-        targets: torch.Tensor | np.ndarray,
+        visibles: torch.Tensor | np.ndarray,
         beta: float = 1.0,
         **kwargs,
-    ) -> Dict[str, torch.Tensor]:
-        """Samples from the annaRBM conditioned on the target visible units. During the sampling, the visibles are kept fixed
-        and the labels and hidden units are sampled alternatively. The label's conditional probability distribution is returned.
+    ) -> torch.Tensor:
+        """Returns the probability distribution of each label given the visible units: p(l|v).
 
         Args:
             gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
-            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
-                instance or a torch.Tensor (np.ndarray) representing the labels.
-            targets (torch.Tensor | np.ndarray): Target visible units.
+            visibles (torch.Tensor | np.ndarray): Visible units.
             beta (float, optional): Inverse temperature. Defaults to 1.0.
 
         Returns:
-            Dict[str, torch.Tensor]: Labels's probability distribution.
+            torch.Tensor: Labels's probability distribution: p(l|v).
         """
-        if isinstance(chains, dict):
-            label = chains["label"]
-        elif isinstance(chains, torch.Tensor):
-            label = chains
-        elif isinstance(chains, np.ndarray):
-            label = torch.tensor(chains, device=self.device, dtype=self.dtype)
-        if isinstance(targets, np.ndarray):
-            targets = torch.tensor(targets, device=self.device, dtype=self.dtype)
-        elif isinstance(targets, torch.Tensor):
-            targets = targets.to(self.device, dtype=self.dtype)
-        if len(targets) != len(label):
-            raise ValueError(f"The number of targets ({len(targets)}) and chains ({len(label)}) must be the same.")
+        if isinstance(visibles, np.ndarray):
+            visibles = torch.tensor(visibles, device=self.device, dtype=self.dtype)
         
         p_labels = _predict_labels(
-            gibbs_steps=gibbs_steps,
-            visible=targets,
-            label=label,
+            visible=visibles,
             params=self.params,
             beta=beta,            
         )
