@@ -1,5 +1,6 @@
 from typing import Dict, Tuple
 import torch
+from adabmDCA.functional import one_hot
 
 
 @torch.jit.script
@@ -38,10 +39,12 @@ def _sample_labels(
     beta: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    ml = torch.sigmoid(
-        beta * (params["lbias"] + (hidden @ params["label_matrix"].T))
+    ml = torch.softmax(
+        beta * (params["lbias"] + (hidden @ params["label_matrix"].T)),
+        dim=-1,
     )
-    l = torch.bernoulli(ml)
+    l = one_hot(torch.multinomial(ml, 1), num_classes=ml.shape[-1]).to(params["weight_matrix"].dtype).view(-1, ml.shape[-1])
+    
     return (l, ml)
 
 

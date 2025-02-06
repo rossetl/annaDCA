@@ -14,15 +14,15 @@ def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParse
     dca_args.add_argument("--alphabet",           type=str,   default="protein",    help="(Defaults to protein). Type of encoding for the sequences. Choose among ['protein', 'rna', 'dna'] or a user-defined string of tokens.")
     dca_args.add_argument("--lr",                 type=float, default=0.01,         help="(Defaults to 0.01). Learning rate.")
     dca_args.add_argument("--gibbs_steps",        type=int,   default=10,           help="(Defaults to 10). Number of Alternating Gibbs steps for each gradient estimation.")
-    dca_args.add_argument("--nchains",            type=int,   default=2000,         help="(Defaults to 2000). Number of Markov chains to run in parallel. It also corresponds to the batch size.")
-    dca_args.add_argument("--nepochs",            type=int,   default=1000,         help="(Defaults to 1000). Maximum number of gradient updates allowed.")
+    dca_args.add_argument("--nchains",            type=int,   default=5000,         help="(Defaults to 5000). Number of Markov chains to run in parallel. It also corresponds to the batch size.")
+    dca_args.add_argument("--nepochs",            type=int,   default=10000,        help="(Defaults to 10000). Maximum number of gradient updates allowed.")
     dca_args.add_argument("--pseudocount",        type=float, default=1e-8,         help="(Defaults to 1e-8). Pseudo count for the single and two-sites statistics. Acts as a regularization.")
     dca_args.add_argument("--eta",                type=float, default=1.0,          help="(Defaults to 1.0). Relative contribution of the label term.")
     dca_args.add_argument("--uncentered",         action="store_true",              help="(Defaults to False). If specified, the uncentered version of the gradient is used.")
     dca_args.add_argument("--init_from_profile",  action="store_true",              help="(Defaults to False). If specified, the biases are initialized using the independent-site model.")
     dca_args.add_argument("--seed",               type=int,   default=0,            help="(Defaults to 0). Seed for the random number generator.")
     dca_args.add_argument("--device",             type=str,   default="cuda",       help="(Defaults to cuda). Device to be used.")
-    dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float32", "float64"])
+    dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float16", "float32", "float64"])
     
     return parser
 

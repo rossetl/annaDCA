@@ -30,11 +30,6 @@ def pcd(
     # Compute the hidden magnetization of the data
     data_batch["hidden"] = rbm.sample_hiddens(**data_batch)["hidden_mag"]
     
-    # For all data in the batch that have zero label, infer the label
-    #infered_labels = torch.nn.functional.one_hot(rbm.predict_labels(data_batch["visible"]).argmax(dim=1), num_classes=rbm.params["lbias"].shape[0]).to(rbm.dtype)
-    #infered_labels = rbm.predict_labels(data_batch["visible"])
-    #data_batch["label"] = torch.where(torch.all(data_batch["label"] == 0, dim=1, keepdim=True), infered_labels, data_batch["label"])
-    
     # Compute the gradient of the Log-Likelihood
     rbm.compute_gradient(
         data=data_batch,

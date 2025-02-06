@@ -4,20 +4,13 @@ import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
 
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import torch
 from adabmDCA.dataset import DatasetDCA
 from adabmDCA.fasta import get_tokens, compute_weights
 from adabmDCA.functional import one_hot
 
-from annadca.utils import _parse_labels, _complete_labels
-
-
-class DataLoader_shuffle(DataLoader):
-    def __iter__(self):
-        self.dataset.shuffle()  # Ensure the dataset is shuffled
-        return super().__iter__()
-    
+from annadca.utils import _parse_labels, _complete_labels    
 
 class annaDataset(ABC, Dataset):
     """Abstract class for the dataset that handles annotations.

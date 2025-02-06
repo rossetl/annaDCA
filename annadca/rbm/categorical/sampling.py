@@ -41,20 +41,6 @@ def _sample_visibles(
 
 
 @torch.jit.script
-def _sample_labels_sigmoid(
-    hidden: torch.Tensor,
-    params: Dict[str, torch.Tensor],
-    beta: float = 1.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-
-    ml = torch.sigmoid(
-        beta * (params["lbias"] + (hidden @ params["label_matrix"].T))
-    )
-    l = torch.bernoulli(ml)
-    return (l, ml)
-
-
-@torch.jit.script
 def _sample_labels(
     hidden: torch.Tensor,
     params: Dict[str, torch.Tensor],

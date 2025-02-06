@@ -7,6 +7,7 @@ import time
 import warnings
 
 import torch
+from torch.utils.data import DataLoader
 from torch.optim import SGD
 from adabmDCA.utils import get_device, get_dtype
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
@@ -15,7 +16,6 @@ from annadca.parser import add_args_train
 from annadca.dataset import DatasetBin, DatasetCat, get_dataset
 from annadca import annaRBMbin, annaRBMcat
 from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
-from annadca.dataset import DataLoader_shuffle as DataLoader
 from annadca.train import pcd
 from annadca.utils import get_saved_updates
 
@@ -38,22 +38,23 @@ if __name__ == '__main__':
     print("\n" + "".join(["*"] * 10) + f" Training annaRBM model " + "".join(["*"] * 10) + "\n")
     device = get_device(args.device)
     dtype = get_dtype(args.dtype)
-    print("\n")
-    print(f"Input data:\t\t{args.data}")
-    print(f"Input annotations:\t{args.annotations}")
-    print(f"Output folder:\t\t{args.output}")
-    print(f"Number of hidden units:\t{args.hidden}")
-    print(f"Learning rate:\t\t{args.lr}")
-    print(f"Minibatch size:\t\t{args.nchains}")
-    print(f"Number of chains:\t{args.nchains}")
-    print(f"Number of Gibbs Steps:\t{args.gibbs_steps}")
-    print(f"Number of epochs:\t{args.nepochs}")
-    print(f"Centered gradient:\t{not args.uncentered}")
-    print(f"Profile initialization:\t{args.init_from_profile}")
-    print(f"Labels contribution:\t{args.eta}")
+    template = "{0:<30} {1:<50}"
+    print(template.format("Input MSA:", str(args.data)))
+    print(template.format("Input annotations:", str(args.annotations)))
+    print(template.format("Output folder:", str(args.output)))
+    print(template.format("Number of hidden units:", args.hidden))
+    print(template.format("Learning rate:", args.lr))
+    print(template.format("Minibatch size:", args.nchains))
+    print(template.format("Number of chains:", args.nchains))
+    print(template.format("Number of Gibbs steps:", args.gibbs_steps))
+    print(template.format("Number of epochs:", args.nepochs))
+    print(template.format("Centered gradient:", not args.uncentered))
+    print(template.format("Profile initialization:", args.init_from_profile))
+    print(template.format("Labels contribution:", args.eta))
     if args.pseudocount is not None:
-        print(f"Pseudocount:\t\t{args.pseudocount}")
-    print(f"Random seed:\t\t{args.seed}")
+        print(template.format("Pseudocount:", args.pseudocount))
+    print(template.format("Random seed:", args.seed))
+    print(template.format("Data type:", args.dtype))
     print("\n")
     
     # Import data
@@ -84,7 +85,7 @@ if __name__ == '__main__':
         
     else:
         file_paths = {
-            "log" : folder / Path(f"adabmDCA.log"),
+            "log" : folder / Path(f"annaRBM.log"),
             "params" : folder / Path(f"params.h5"),
             "chains" : folder / Path(f"chains.fasta")
         }
@@ -184,7 +185,7 @@ if __name__ == '__main__':
         
     print("\n")
     # Save the hyperparameters of the model
-    template = "{0:20} {1:10}\n"  
+    template = "{0:<20} {1:<10}\n"  
     with open(file_paths["log"], "w") as f:
         if args.label is not None:
             f.write(template.format("label:", args.label))
@@ -204,7 +205,7 @@ if __name__ == '__main__':
         f.write(template.format("eta:", args.eta))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
-        template = "{0:10} {1:10}\n"
+        template = "{0:<10} {1:<10}\n"
         f.write(template.format("Epoch", "Time [s]"))
         
     # Initialize gradients for the parameters
