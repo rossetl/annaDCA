@@ -4,7 +4,7 @@ This package contains the methods and scripts to train and sample an RBM model p
 ## Installation
 ### Option 1: from PyPl
 ```bash
-python -m pip install annaDCA
+python -m pip install annadca
 ```
 ### Option 2: cloning the repository
 ```bash
