@@ -111,4 +111,4 @@ def _compute_log_likelihood(
     )
     mean_energy_data = (energy_data * weight.view(-1)).sum() / weight.sum()
     
-    return - mean_energy_data - logZ
+    return - mean_energy_data.item() - logZ

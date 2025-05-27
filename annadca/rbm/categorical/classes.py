@@ -29,7 +29,7 @@ from annadca.rbm.categorical.grad import _compute_gradient
 class annaRBMcat(annaRBM):
     def __init__(
         self,
-        params: Dict[str, torch.Tensor] = None,
+        params: Dict[str, torch.Tensor] | None = None,
         device: Optional[torch.device] = "cpu",
         dtype: Optional[torch.dtype] = torch.float32,
     ):
@@ -98,7 +98,7 @@ class annaRBMcat(annaRBM):
     def load(
         self,
         filename: str,
-        index: int = None,
+        index: int | None = None,
         device: torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
         set_rng_state: bool = False,
@@ -497,8 +497,8 @@ class annaRBMcat(annaRBM):
         num_hiddens: int,
         num_states: int,
         num_labels: int,
-        frequencies_visibles: torch.Tensor = None,
-        frequencies_labels: torch.Tensor = None,
+        frequencies_visibles: torch.Tensor | None = None,
+        frequencies_labels: torch.Tensor | None = None,
         std_init: float = 1e-4,
         device: torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
@@ -579,8 +579,8 @@ class annaRBMcat(annaRBM):
         Returns:
             float: Initial log partition function.
         """
-        logZ_visibles = torch.log(torch.exp(self.params["vbias"]).sum(1)).sum()
-        logZ_labels = torch.log(1.0 + torch.exp(self.params["lbias"])).sum()
-        logZ_hiddens = torch.log(1.0 + torch.exp(self.params["hbias"])).sum()
+        logZ_visibles = torch.log(torch.exp(self.params["vbias"]).sum(1)).sum().item()
+        logZ_labels = torch.log(1.0 + torch.exp(self.params["lbias"])).sum().item()
+        logZ_hiddens = torch.log(1.0 + torch.exp(self.params["hbias"])).sum().item()
         return logZ_visibles + logZ_labels + logZ_hiddens
         

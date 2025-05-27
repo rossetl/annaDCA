@@ -79,13 +79,13 @@ def _sample_conditioned(
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
     beta: float = 1.0,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     
     for _ in range(gibbs_steps):
         hidden, _ = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
         visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
     
-    return visible_mag
+    return (visible, visible_mag)
 
 
 @torch.jit.script

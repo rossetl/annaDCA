@@ -4,6 +4,7 @@ import h5py
 import numpy as np
 import torch
 from adabmDCA.fasta import write_fasta, get_tokens
+import os
 
 from annadca.utils import get_saved_updates
 
@@ -19,26 +20,30 @@ def _save_model(
         filename (str): Path to the h5 archive where to store the model.
         num_updates (int): Number of updates performed so far.
     """
-
-    with h5py.File(filename, "a") as f:
-        checkpoint = f.create_group(f"update_{num_updates}")
-
-        # Save the parameters of the model
-        checkpoint["vbias"] = params["vbias"].detach().cpu().numpy()
-        checkpoint["hbias"] = params["hbias"].detach().cpu().numpy()
-        checkpoint["lbias"] = params["lbias"].detach().cpu().numpy()
-        checkpoint["weight_matrix"] = params["weight_matrix"].detach().cpu().numpy()
-        checkpoint["label_matrix"] = params["label_matrix"].detach().cpu().numpy()
-        
-
-        # Save current random state
-        checkpoint["torch_rng_state"] = torch.get_rng_state()
-        checkpoint["numpy_rng_arg0"] = np.random.get_state()[0]
-        checkpoint["numpy_rng_arg1"] = np.random.get_state()[1]
-        checkpoint["numpy_rng_arg2"] = np.random.get_state()[2]
-        checkpoint["numpy_rng_arg3"] = np.random.get_state()[3]
-        checkpoint["numpy_rng_arg4"] = np.random.get_state()[4]
-
+    # create the file if it does not exist
+    if not os.path.exists(filename):
+        with h5py.File(filename, "w") as f:
+            pass
+    else:
+        with h5py.File(filename, "a") as f:
+            checkpoint = f.create_group(f"update_{num_updates}")
+    
+            # Save the parameters of the model
+            checkpoint["vbias"] = params["vbias"].detach().cpu().numpy()
+            checkpoint["hbias"] = params["hbias"].detach().cpu().numpy()
+            checkpoint["lbias"] = params["lbias"].detach().cpu().numpy()
+            checkpoint["weight_matrix"] = params["weight_matrix"].detach().cpu().numpy()
+            checkpoint["label_matrix"] = params["label_matrix"].detach().cpu().numpy()
+            
+    
+            # Save current random state
+            checkpoint["torch_rng_state"] = torch.get_rng_state()
+            checkpoint["numpy_rng_arg0"] = np.random.get_state()[0]
+            checkpoint["numpy_rng_arg1"] = np.random.get_state()[1]
+            checkpoint["numpy_rng_arg2"] = np.random.get_state()[2]
+            checkpoint["numpy_rng_arg3"] = np.random.get_state()[3]
+            checkpoint["numpy_rng_arg4"] = np.random.get_state()[4]
+    
 
 def _load_model(
     filename: str,

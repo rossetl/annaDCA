@@ -13,7 +13,7 @@ from adabmDCA.utils import get_device, get_dtype
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
 
 from annadca.parser import add_args_train
-from annadca.dataset import DatasetBin, DatasetCat, get_dataset
+from annadca.dataset import annaDataset
 from annadca import annaRBMbin, annaRBMcat
 from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
 from annadca.train import pcd
@@ -59,13 +59,17 @@ if __name__ == '__main__':
     
     # Import data
     print("Importing dataset...")
-    dataset = get_dataset(
+    dataset = annaDataset(
         path_data=args.data,
         path_ann=args.annotations,
-        path_weights=args.weights,
+        column_names=args.column_names,
+        column_sequences=args.column_sequences,
+        column_labels=args.column_labels,
+        is_binary=args.is_binary,
         alphabet=args.alphabet,
         clustering_th=args.clustering_seqid,
         no_reweighting=args.no_reweighting,
+        path_weights=args.weights,
         device=device,
         dtype=dtype,
     )
@@ -121,15 +125,15 @@ if __name__ == '__main__':
     num_hiddens = args.hidden
     num_labels = dataset.get_num_classes()
     num_states = dataset.get_num_states()
-    if isinstance(dataset, DatasetBin):
+    if dataset.is_binary:
         rbm = annaRBMbin()
-        data = dataset.data
+        data = dataset.data_one_hot
         frequences_visible = get_freq_single_point_bin(
             data=data,
             weights=dataset.weights,
             pseudo_count=args.pseudocount,
         )
-    elif isinstance(dataset, DatasetCat):
+    elif not dataset.is_binary:
         rbm = annaRBMcat()
         data = dataset.data_one_hot
         frequences_visible = get_freq_single_point_cat(
@@ -240,6 +244,7 @@ if __name__ == '__main__':
     start = time.time()
     pbar = tqdm(initial=0, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
     upd = 0
+    rbm.save(filename=file_paths["params"], num_updates=upd)
     with torch.no_grad():
         while upd < args.nepochs:
             
