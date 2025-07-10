@@ -75,9 +75,9 @@ def _sample_conditioned(
     
     for _ in range(gibbs_steps):
         hidden, _ = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
+        visible = _sample_visibles(hidden=hidden, params=params, beta=beta)
     
-    return visible_mag
+    return (visible, hidden)
 
 
 @torch.jit.script

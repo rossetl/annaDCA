@@ -28,7 +28,7 @@ from annadca.rbm.binary.grad import _compute_gradient
 class annaRBMbin(annaRBM):
     def __init__(
         self,
-        params: Dict[str, torch.Tensor] = None,
+        params: Dict[str, torch.Tensor] | None = None,
         device: Optional[torch.device] = "cpu",
         dtype: Optional[torch.dtype] = torch.float32,
     ):
@@ -37,8 +37,8 @@ class annaRBMbin(annaRBM):
         
     def to(
         self,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] | None = None,
+        dtype: Optional[torch.dtype] | None = None,
     ):
         """Moves the parameters to the specified device and/or dtype.
 
@@ -54,8 +54,8 @@ class annaRBMbin(annaRBM):
     
     def clone(
         self,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
+        device: Optional[torch.device] | None = None,
+        dtype: Optional[torch.dtype] | None = None,
     ):
         """Clone the annaRBMbin instance.
 
@@ -97,8 +97,8 @@ class annaRBMbin(annaRBM):
     def load(
         self,
         filename: str,
-        index: int = None,
-        device: torch.device = "cpu",
+        index: int | None = None,
+        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
         set_rng_state: bool = False,
     ) -> None:
@@ -125,7 +125,6 @@ class annaRBMbin(annaRBM):
         visible: torch.Tensor,
         hidden: torch.Tensor,
         label: torch.Tensor,
-        **kwargs,    
     ) -> torch.Tensor:
         """Computes the energy of the model on the given configuration.
 
@@ -192,8 +191,8 @@ class annaRBMbin(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled hidden units and hidden magnetization.
         """
-        h, mh = _sample_hiddens(visible, label, self.params, beta)
-        return {"hidden": h, "hidden_mag": mh}
+        hidden, hidden_mag = _sample_hiddens(visible, label, self.params, beta)
+        return {"hidden": hidden, "hidden_mag": hidden_mag}
     
     
     def sample_visibles(
@@ -211,8 +210,8 @@ class annaRBMbin(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled visible units and visible magnetization.
         """
-        v, mv = _sample_visibles(hidden, self.params, beta)
-        return {"visible": v, "visible_mag": mv}
+        visible, visible_mag = _sample_visibles(hidden, self.params, beta)
+        return {"visible": visible, "visible_mag": visible_mag}
     
     
     def sample_labels(
@@ -230,15 +229,16 @@ class annaRBMbin(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled labels and label magnetization.
         """
-        l, ml = _sample_labels(hidden, self.params, beta)
-        return {"label": l, "label_mag": ml}
+        label, label_mag = _sample_labels(hidden, self.params, beta)
+        return {"label": label, "label_mag": label_mag}
     
     
     def sample(
         self,
         gibbs_steps: int,
-        visible: torch.Tensor,
-        label: torch.Tensor,
+        num_samples: int | None = None,
+        visible: torch.Tensor | None = None,
+        label: torch.Tensor | None = None,
         beta: float = 1.0,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
@@ -246,53 +246,69 @@ class annaRBMbin(annaRBM):
 
         Args:
             gibbs_steps (int): Number of Gibbs steps.
-            visible (torch.Tensor): Visible units.
-            label (torch.Tensor): Labels.
+            num_samples (int | None, optional): Number of samples to generate. If None, it will be inferred from the visible or label tensors. Defaults to None.
+            visible (torch.Tensor): Visible units. If None, it will be initialized randomly.
+            label (torch.Tensor): Labels. If None, it will be initialized randomly. If both visible and label are None, num_samples must be provided.
             beta (float, optional): Inverse temperature. Defaults to 1.0.
 
         Returns:
             Dict[str, torch.Tensor]: Sampled visible, hidden units and labels.
         """
-        v, h, l = _sample(gibbs_steps, visible, label, self.params, beta)
-        return {"visible": v, "hidden": h, "label": l}
+        # Infer num_samples if possible
+        if visible is not None:
+            num_samples = visible.shape[0]
+        elif label is not None:
+            num_samples = label.shape[0]
+        elif num_samples is None or num_samples <= 0:
+            raise ValueError("Either visible, label or a positive num_samples must be provided.")
+
+        # Initialize missing visible/label
+        chains_init = self.init_chains(num_samples=num_samples)
+        if visible is None:
+            visible = chains_init["visible"]
+        if label is None:
+            label = chains_init["label"]
+
+        if visible.shape[0] != label.shape[0]:
+            raise ValueError(f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same.")
+
+        visible, hidden, label = _sample(gibbs_steps, visible, label, self.params, beta)
+        return {"visible": visible, "hidden": hidden, "label": label}
     
     
     def sample_conditioned(
         self,
         gibbs_steps: int,
-        chains: Dict[str, torch.Tensor] | torch.Tensor | np.ndarray,
         targets: torch.Tensor | np.ndarray,
+        visible: torch.Tensor | None = None,
         beta: float = 1.0,
         **kwargs,
-    ) -> torch.Tensor:
+    ) -> Dict[str, torch.Tensor]:
         """Samples from the annaRBM conditioned on the target labels. During the sampling, the labels are kept fixed
         and the visible and hidden units are sampled alternatively. The visible's conditional probability distribution
         is returned.
 
         Args:
             gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
-            chains (Dict[str, torch.Tensor] | torch.Tensor | np.ndarray): Chains initialization. It can be either a chain dictionary
-                instance or a torch.Tensor (np.ndarray) representing the visible units.
             targets (torch.Tensor | np.ndarray): Target labels.
+            visible (torch.Tensor | None, optional): Visible units. If None, it will be initialized randomly. Defaults to None.
             beta (float, optional): Inverse temperature. Defaults to 1.0.
 
         Returns:
-            torch.Tensor: Conditional probability distribution of the visible units.
+            Dict[str, torch.Tensor]: Sampled visible and hidden units.
         """
-        if isinstance(chains, dict):
-            visible = chains["visible"]
-        elif isinstance(chains, torch.Tensor):
-            visible = chains
-        elif isinstance(chains, np.ndarray):
-            visible = torch.tensor(chains, device=self.device, dtype=self.dtype)
         if isinstance(targets, np.ndarray):
             targets = torch.tensor(targets, device=self.device, dtype=self.dtype)
         elif isinstance(targets, torch.Tensor):
             targets = targets.to(self.device, dtype=self.dtype)
-        if len(targets) != len(visible):
-            raise ValueError(f"The number of targets ({len(targets)}) and chains ({len(visible)}) must be the same.")
+        num_samples = targets.shape[0]
+        if visible is None:
+            visible = self.init_chains(num_samples=num_samples)["visible"]
+        else:
+            if visible.shape[0] != num_samples:
+                raise ValueError(f"The number of visible units ({visible.shape[0]}) and targets ({num_samples}) must be the same.")
         
-        p_visible = _sample_conditioned(
+        visible, hidden = _sample_conditioned(
             gibbs_steps=gibbs_steps,
             label=targets,
             visible=visible,
@@ -300,8 +316,7 @@ class annaRBMbin(annaRBM):
             beta=beta,
         )
 
-        return p_visible
-    
+        return {"visible": visible, "hidden": hidden}
     
     def predict_labels(
         self,
@@ -312,7 +327,6 @@ class annaRBMbin(annaRBM):
         """Returns the probability distribution of each label given the visible units: p(l|v).
 
         Args:
-            gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
             visibles (torch.Tensor | np.ndarray): Visible units.
             beta (float, optional): Inverse temperature. Defaults to 1.0.
 
@@ -418,7 +432,6 @@ class annaRBMbin(annaRBM):
         filename: str,
         device: torch.device,
         dtype: torch.dtype,
-        **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """Load the persistent chains from a fasta file.
 
@@ -473,7 +486,8 @@ class annaRBMbin(annaRBM):
     
     def zerosum_gauge(self) -> None:
         """Uneffective method for the binary annaRBM."""
-        return None
+        # The zerosum gauge is not applicable to the binary RBM, so we do nothing here.
+        pass
         
     
     def init_parameters(
@@ -486,7 +500,6 @@ class annaRBMbin(annaRBM):
         std_init: float = 1e-4,
         device: torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
-        **kwargs,
     ) -> None:
         """
         Initialize the parameters of the model. Hidden biases are set to 0,
@@ -502,9 +515,6 @@ class annaRBMbin(annaRBM):
             std_init (float, optional): Standard deviation of the weight matrix. Defaults to 1e-4.
             device (torch.device): Device for the parameters.
             dtype (torch.dtype): Data type for the parameters.
-
-        Returns:
-            Dict[str, torch.Tensor]: Parameters of the model.
         """
         self.device = device
         self.dtype = dtype
@@ -516,7 +526,8 @@ class annaRBMbin(annaRBM):
             frequencies_labels=frequencies_labels,
             std_init=std_init,
             device=self.device,
-            dtype=self.dtype)
+            dtype=self.dtype
+        )
         
     
     def num_visibles(self) -> int:

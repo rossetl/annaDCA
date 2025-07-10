@@ -14,11 +14,11 @@ def _sample_hiddens(
     L, q, P = params["weight_matrix"].shape
     weight_matrix_oh = params["weight_matrix"].view(L * q, P)
     visible_oh = visible.view(-1, L * q)
-    mh = torch.sigmoid(
+    hidden_mag = torch.sigmoid(
         beta * (params["hbias"] + (visible_oh @ weight_matrix_oh) + (label @ params["label_matrix"]))
     )
-    h = torch.bernoulli(mh).to(params["weight_matrix"].dtype)
-    return (h, mh)
+    hidden = torch.bernoulli(hidden_mag).to(params["weight_matrix"].dtype)
+    return (hidden, hidden_mag)
 
 
 @torch.jit.script
@@ -29,15 +29,15 @@ def _sample_visibles(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
     num_visibles, num_states, _ = params["weight_matrix"].shape
-    mv = torch.softmax(
+    visible_mag = torch.softmax(
         beta * (params["vbias"] + torch.einsum("np,lqp->nlq", hidden, params["weight_matrix"])),
         dim=-1
     )
-    v = one_hot(
-        torch.multinomial(mv.view(-1, num_states), 1).view(-1, num_visibles),
+    visible = one_hot(
+        torch.multinomial(visible_mag.view(-1, num_states), 1).view(-1, num_visibles),
         num_classes=num_states,
     ).to(params["weight_matrix"].dtype)
-    return (v, mv)
+    return (visible, visible_mag)
 
 
 @torch.jit.script
@@ -47,13 +47,13 @@ def _sample_labels(
     beta: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    ml = torch.softmax(
+    label_mag = torch.softmax(
         beta * (params["lbias"] + (hidden @ params["label_matrix"].T)),
         dim=-1,
     )
-    l = one_hot(torch.multinomial(ml, 1), num_classes=ml.shape[-1]).to(params["weight_matrix"].dtype).view(-1, ml.shape[-1])
+    label = one_hot(torch.multinomial(label_mag, 1), num_classes=label_mag.shape[-1]).to(params["weight_matrix"].dtype).view(-1, label_mag.shape[-1])
     
-    return (l, ml)
+    return (label, label_mag)
 
 
 def _sample(
@@ -79,13 +79,13 @@ def _sample_conditioned(
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
     beta: float = 1.0,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     
     for _ in range(gibbs_steps):
         hidden, _ = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
+        visible, _ = _sample_visibles(hidden=hidden, params=params, beta=beta)
     
-    return (visible, visible_mag)
+    return (visible, hidden)
 
 
 @torch.jit.script

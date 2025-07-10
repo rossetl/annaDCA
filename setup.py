@@ -24,6 +24,6 @@ setup(
         ],
     },
     install_requires=[
-        'adabmDCA>=0.3.3'
+        'adabmDCA>=0.4.3'
     ],
 )
