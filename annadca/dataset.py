@@ -6,7 +6,6 @@ import pandas as pd
 from torch.utils.data import Dataset
 import torch
 from torch.nn.functional import one_hot
-from sklearn.preprocessing import OneHotEncoder
 from adabmDCA.fasta import get_tokens, compute_weights, import_from_fasta, encode_sequence
 
 class annaDataset(Dataset):
@@ -29,9 +28,9 @@ class annaDataset(Dataset):
         self.device = device
         self.dtype = dtype
         self.data = pd.DataFrame()
-        self.data_one_hot = []
-        self.labels_one_hot = []
-        self.weights = []
+        self.data_one_hot = torch.tensor([], dtype=dtype, device=device)
+        self.labels_one_hot = torch.tensor([], dtype=dtype, device=device)
+        self.weights = torch.tensor([], dtype=dtype, device=device)
         is_fasta = False
         self.is_binary = is_binary
         self.column_names = column_names
@@ -126,17 +125,16 @@ class annaDataset(Dataset):
             
     def parse_labels(self):
         labels = self.data[self.column_labels]
-        non_missing_labels = labels.notna()
-        unique_labels = labels[non_missing_labels].unique()
+        unique_labels = np.unique(labels.dropna())
         self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
         self.label_to_idx = {label: i for i, label in self.idx_to_label.items()}
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
-        encoded_labels = encoder.fit_transform(labels[non_missing_labels].values.reshape(-1, 1))
-        one_hot_shape = (len(labels), encoded_labels.shape[1])
-        one_hot_matrix = np.zeros(one_hot_shape)
-        one_hot_matrix[non_missing_labels] = encoded_labels
+        label_indices = labels.map(self.label_to_idx).fillna(-1).astype(int)
+        num_classes = len(unique_labels)
+        one_hot = np.zeros((len(labels), num_classes), dtype=np.float32)
+        valid = label_indices != -1
+        one_hot[valid, label_indices[valid]] = 1.0
         self.labels_one_hot = torch.tensor(
-            one_hot_matrix,
+            one_hot,
             dtype=self.dtype,
             device=self.device,
         )

@@ -414,10 +414,6 @@ class annaRBMcat(annaRBM):
             params=self.params,
             use_profile=use_profile,
         )
-        chains = self.sample(
-            gibbs_steps=10,
-            **chains,
-        )
         return chains
     
     
