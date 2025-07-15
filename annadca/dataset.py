@@ -211,6 +211,32 @@ class annaDataset(Dataset):
             labels = np.expand_dims(labels, axis=0)
             
         return np.array([self.idx_to_label[np.argmax(l).item()] for l in labels])
+    
+    
+    def to_one_hot(
+        self,
+        labels: torch.Tensor | np.ndarray | list,
+    ) -> torch.Tensor:
+        """Converts the original labels to one-hot encoded labels.
+        
+        Args:
+            labels (torch.Tensor | np.ndarray | list): Original labels.
+            
+        Returns:
+            torch.Tensor: One-hot encoded labels.
+        """
+        if isinstance(labels, torch.Tensor):
+            labels = labels.cpu().numpy()
+        elif isinstance(labels, list):
+            labels = np.array(labels)
+        if len(labels.shape) == 1:
+            labels = np.expand_dims(labels, axis=0)
+        
+        one_hot_labels = np.zeros((labels.shape[0], len(self.idx_to_label)), dtype=np.float32)
+        for i, label in enumerate(labels):
+            if label in self.label_to_idx:
+                one_hot_labels[i, self.label_to_idx[label]] = 1.0
+        return torch.tensor(one_hot_labels, dtype=self.dtype, device=self.device)
 
 
     def __len__(self):
