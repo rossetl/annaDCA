@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='annadca',
-    version='0.1.0',
+    version='0.2.0',
     author='Lorenzo Rosset, Aurélien Decelle, Beatriz Seoane, Francesco Zamponi, Martin Weigt',
     maintainer='Lorenzo Rosset',
     author_email='rosset.lorenzo@gmail.com',
