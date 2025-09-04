@@ -34,6 +34,7 @@ def _compute_energy_visibles(
     visible: torch.Tensor,
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
+    **kwargs,
 ) -> torch.Tensor:
 
     @torch.jit.script
@@ -59,6 +60,7 @@ def _compute_energy_visibles(
 def _compute_energy_hiddens(
     hidden: torch.Tensor,
     params: Dict[str, torch.Tensor],
+    **kwargs,
 ) -> torch.Tensor:
     
     warnings.warn("This function needs to be tested for categorical variables.", UserWarning)

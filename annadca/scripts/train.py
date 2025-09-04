@@ -1,5 +1,5 @@
-from pathlib import Path
 import argparse
+import os
 import numpy as np
 from tqdm import tqdm
 from itertools import cycle
@@ -49,6 +49,8 @@ if __name__ == '__main__':
     print(template.format("Number of Gibbs steps:", args.gibbs_steps))
     print(template.format("Number of epochs:", args.nepochs))
     print(template.format("Centered gradient:", not args.uncentered))
+    print(template.format("L1 regularization:", args.l1))
+    print(template.format("L2 regularization:", args.l2))
     print(template.format("Profile initialization:", args.init_from_profile))
     print(template.format("Labels contribution:", args.eta))
     if args.pseudocount is not None:
@@ -56,7 +58,12 @@ if __name__ == '__main__':
     print(template.format("Random seed:", args.seed))
     print(template.format("Data type:", args.dtype))
     print("\n")
-    
+
+    # Check that input files exist
+    for path in [args.data, args.annotations, args.path_params, args.path_chains]:
+        if path is not None and not os.path.exists(path):
+            raise FileNotFoundError(f"Input file {path} not found.")
+
     # Import data
     print("Importing dataset...")
     dataset = annaDataset(
@@ -75,36 +82,41 @@ if __name__ == '__main__':
     )
     tokens = dataset.tokens
     print(f"Alphabet: {dataset.tokens}")
+    print(f"Dataset imported successfully: M={len(dataset)}, L={dataset.L}, q={dataset.q}.")
     
     # Create the folder where to save the model
-    folder = Path(args.output)
-    folder.mkdir(parents=True, exist_ok=True)
-    
+    folder = args.output
+    os.makedirs(folder, exist_ok=True)
+
     if args.label is not None:
         file_paths = {
-            "log" : folder / Path(f"{args.label}.log"),
-            "params" : folder / Path(f"{args.label}_params.h5"),
-            "chains" : folder / Path(f"{args.label}_chains.fasta")
+            "log" : os.path.join(folder, f"{args.label}.log"),
+            "params" : os.path.join(folder, f"{args.label}_params.h5"),
+            "chains" : os.path.join(folder, f"{args.label}_chains.fasta")
         }
         
     else:
         file_paths = {
-            "log" : folder / Path(f"annaRBM.log"),
-            "params" : folder / Path(f"params.h5"),
-            "chains" : folder / Path(f"chains.fasta")
+            "log" : os.path.join(folder, f"annaRBM.log"),
+            "params" : os.path.join(folder, f"params.h5"),
+            "chains" : os.path.join(folder, f"chains.fasta")
         }
         
     # Check if the files in file_paths already exist. If so, delete them
-    for path in file_paths.values():
-        if path.exists():
-            path.unlink()
-            
+    if args.path_params is None:
+        for path in file_paths.values():
+            if os.path.exists(path):
+                # Ask for confirmation before deleting
+                confirm = input(f"File {path} already exists. Do you want to delete it? (y/n): ")
+                if confirm.lower() == "y":
+                    os.remove(path)
+
     # Save the weights if not already provided
     if args.weights is None and not args.no_reweighting:
         if args.label is not None:
-            path_weights = folder / f"{args.label}_weights.dat"
+            path_weights = os.path.join(folder, f"{args.label}_weights.dat")
         else:
-            path_weights = folder / "weights.dat"
+            path_weights = os.path.join(folder, "weights.dat")
         np.savetxt(path_weights, dataset.weights.cpu().numpy())
         print(f"Weights saved in {path_weights}")
     elif args.no_reweighting:
@@ -146,14 +158,15 @@ if __name__ == '__main__':
         weights=dataset.weights,
         pseudo_count=args.pseudocount,
     )
-    
+
     if args.path_params is not None:
-        rbm.load(
+        upd = rbm.load(
             filename=args.path_params,
             device=device,
             dtype=dtype,
+            set_rng_state=True,
         )
-        
+        print("Model parameters loaded from", args.path_params)
     else:
         if args.init_from_profile:
             init_frequences_visible = frequences_visible
@@ -173,6 +186,7 @@ if __name__ == '__main__':
             device=device,
             dtype=dtype,
         )
+        upd = 0
     
     if args.path_chains is not None:
         chains = rbm.load_chains(
@@ -181,6 +195,7 @@ if __name__ == '__main__':
             dtype=dtype,
             alphabet=tokens,
         )
+        print("Chains loaded from", args.path_chains)
     else:
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
@@ -206,6 +221,8 @@ if __name__ == '__main__':
         f.write(template.format("pseudo count:", args.pseudocount))
         f.write(template.format("centered:", not args.uncentered))
         f.write(template.format("profile init:", args.init_from_profile))
+        f.write(template.format("l1 strength:", args.l1))
+        f.write(template.format("l2 strength:", args.l2))
         f.write(template.format("eta:", args.eta))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
@@ -242,12 +259,11 @@ if __name__ == '__main__':
     
     # Train the model
     start = time.time()
-    pbar = tqdm(initial=0, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
-    upd = 0
-    rbm.save(filename=file_paths["params"], num_updates=upd)
+    pbar = tqdm(initial=upd, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
+    if upd == 0:
+        rbm.save(filename=file_paths["params"], num_updates=upd)
     with torch.no_grad():
         while upd < args.nepochs:
-            
             upd += 1
             if upd % 10 == 0:
                 pbar.update(10)
@@ -262,6 +278,8 @@ if __name__ == '__main__':
                 gibbs_steps=args.gibbs_steps,
                 pseudo_count=args.pseudocount,
                 centered=(not args.uncentered),
+                lambda_l1=args.l1,
+                lambda_l2=args.l2,
                 eta=args.eta,
             )
 

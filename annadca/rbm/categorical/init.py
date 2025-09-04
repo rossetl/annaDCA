@@ -9,8 +9,8 @@ def _init_parameters(
     num_hiddens: int,
     num_labels: int,
     num_states: int,
-    frequencies_visibles: torch.Tensor = None,
-    frequencies_labels: torch.Tensor = None,
+    frequencies_visibles: torch.Tensor | None = None,
+    frequencies_labels: torch.Tensor | None = None,
     std_init: float = 1e-4,
     device: torch.device = torch.device("cpu"),
     dtype: torch.dtype = torch.float32,
@@ -91,13 +91,13 @@ def _init_chains(
         ml = torch.ones(
             size=(num_samples, num_labels),
             device=params["lbias"].device,
-            dtype=params["lbias"].dtype) / 2
-        
+            dtype=params["lbias"].dtype) / num_labels
+
     visible = one_hot(
         torch.multinomial(mv.view(-1, num_states), 1).view(-1, num_visibles),
         num_classes=num_states,
     ).to(params["weight_matrix"].dtype)
-    label = torch.bernoulli(ml)
+    label = one_hot(torch.multinomial(ml, 1), num_classes=num_labels).to(params["weight_matrix"].dtype).squeeze(1)
     visible_flat = visible.view(num_samples, -1)
     weight_matrix_flat = params["weight_matrix"].view(num_visibles * num_states, -1)
     

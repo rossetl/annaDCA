@@ -1,5 +1,4 @@
 from typing import Any
-from pathlib import Path
 import numpy as np
 import pandas as pd
 
@@ -12,8 +11,8 @@ class annaDataset(Dataset):
     
     def __init__(
         self,
-        path_data: str | Path,
-        path_ann: str | Path | None = None,
+        path_data: str,
+        path_ann: str | None = None,
         column_names: str = "name",
         column_sequences: str = "sequence",
         column_labels: str = "label",
@@ -21,7 +20,7 @@ class annaDataset(Dataset):
         alphabet: str = "protein",
         clustering_th: float = 0.8,
         no_reweighting: bool = True,
-        path_weights: str | Path | None = None,
+        path_weights: str | None = None,
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
@@ -31,23 +30,16 @@ class annaDataset(Dataset):
         self.data_one_hot = torch.tensor([], dtype=dtype, device=device)
         self.labels_one_hot = torch.tensor([], dtype=dtype, device=device)
         self.weights = torch.tensor([], dtype=dtype, device=device)
-        is_fasta = False
         self.is_binary = is_binary
         self.column_names = column_names
         self.column_sequences = column_sequences
         self.column_labels = column_labels
         self.L = 0
         self.q = 0
-        
-        if is_binary:
-            self.parse_binary(path_data)
-            self.data_one_hot = torch.tensor(
-                self.data["sequence"].values,
-                dtype=self.dtype,
-                device=self.device,
-            )
-            self.L = self.data_one_hot.shape[1]
-            self.q = 2  # binary sequences have 2 states (0 and 1)
+
+        # check if path_data points to a text file
+        if path_data.endswith(".txt") or path_data.endswith(".dat"):
+            self.parse_text(path_data)
             if path_ann is not None:
                 self.parse_csv(
                     path_ann=path_ann,
@@ -56,44 +48,48 @@ class annaDataset(Dataset):
                     column_labels=column_labels,
                 )
             else:
-                raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
-        
-        # check if the input file is a fasta file
-        with open(path_data, "r") as f:
-            first_line = f.readline()
-            if first_line.startswith(">"):
-                is_fasta = True
-                self.parse_fasta(path_data)
-                
-        if is_fasta:
-            if path_ann is not None:
-                self.parse_csv(
-                    path_ann=path_ann,
-                    column_names=column_names,
-                    column_sequences=column_sequences,
-                    column_labels=column_labels,
-                )
-            else:
-                raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
-        else:
+                raise ValueError("The annotations file must be provided if data are taken from a text file.")
+        elif path_data.endswith(".csv"):
             self.parse_csv(
                 path_ann=path_data,
                 column_names=column_names,
                 column_sequences=column_sequences,
                 column_labels=column_labels,
             )
-        
-        # one-hot representation of the labels
+        else:
+            # check that the input file is a valid fasta file
+            with open(path_data, "r") as f:
+                first_line = f.readline()
+                if first_line.startswith(">"):
+                    self.parse_fasta(path_data)
+                else:
+                    raise ValueError("Input data not recognized as a text file nor a .csv file. Invalid FASTA format.")
+            if path_ann is not None:
+                self.parse_csv(
+                    path_ann=path_ann,
+                    column_names=column_names,
+                    column_sequences=column_sequences,
+                    column_labels=column_labels,
+                )
+            else:
+                raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
+
+        if is_binary:
+            self.tokens = "01"
+        else:
+            self.tokens = get_tokens(alphabet)
+
+        # encode sequences
+        self.data_one_hot = torch.tensor(
+                encode_sequence(list(self.data[column_sequences].values), self.tokens),
+                dtype=self.dtype,
+                device=self.device,
+            )
+        # one-hot representation of sequences and labels
         self.parse_labels()
         
-        # one-hot representation of the sequences
-        if not is_binary:
-            self.tokens = get_tokens(alphabet)
-            self.data_one_hot = encode_sequence(self.data[column_sequences].values, self.tokens)
-            self.L = self.data_one_hot.shape[1]
-            self.q = len(self.tokens)
-        else:
-            self.tokens = "01"
+        self.L = self.data_one_hot.shape[1]
+        self.q = len(self.tokens)
             
         if no_reweighting:
             self.weights = torch.ones(len(self.data), 1, dtype=dtype, device=device).view(-1, 1)
@@ -114,15 +110,9 @@ class annaDataset(Dataset):
                 ).view(-1, 1)
                 
         if not is_binary:
-            # convert data_one_hot to a (M, L * q) tensor
-            self.data_one_hot = torch.tensor(
-                self.data_one_hot,
-                dtype=self.dtype,
-                device=self.device,
-            ).long()
-            self.data_one_hot = one_hot(self.data_one_hot, num_classes=self.q).to(self.dtype)
-            
-            
+            self.data_one_hot = one_hot(self.data_one_hot.long(), num_classes=self.q).to(self.dtype)
+
+
     def parse_labels(self):
         labels = self.data[self.column_labels]
         unique_labels = np.unique(labels.dropna())
@@ -142,7 +132,7 @@ class annaDataset(Dataset):
         
     def parse_csv(
         self,
-        path_ann: str | Path,
+        path_ann: str,
         column_names: str = "name",
         column_sequences: str = "sequence",
         column_labels: str = "label",
@@ -169,17 +159,17 @@ class annaDataset(Dataset):
             
     def parse_fasta(
         self,
-        path_data: str | Path,
+        path_data: str,
     ):
         names, sequences = import_from_fasta(path_data)
         self.data = pd.DataFrame.from_dict(
             {"name": names, "sequence": sequences}  
         )
-        
-        
-    def parse_binary(
+
+
+    def parse_text(
         self,
-        path_data: str | Path,
+        path_data: str,
     ):
         data = torch.tensor(
             np.loadtxt(path_data),
@@ -290,7 +280,7 @@ class annaDataset(Dataset):
         """
         perm = torch.randperm(len(self.data))
         # shuffle the data, one-hot encoded sequences, names, weights, and labels
-        self.data = self.data.iloc[perm].reset_index(drop=True)
+        self.data = self.data.iloc[perm.numpy()].reset_index(drop=True)
         self.data_one_hot = self.data_one_hot[perm]
         self.weights = self.weights[perm]
         self.labels_one_hot = self.labels_one_hot[perm]

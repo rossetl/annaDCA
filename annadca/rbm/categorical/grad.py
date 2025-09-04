@@ -12,6 +12,8 @@ def _compute_gradient(
     params: Dict[str, torch.Tensor],
     pseudo_count: float = 0.0,
     centered: bool = True,
+    lambda_l1: float = 0.0,
+    lambda_l2: float = 0.0,
     eta: float = 1.0,
 ) -> None:
     """Computes the gradient of the Log-Likelihood for the binary annaRBM.
@@ -22,6 +24,8 @@ def _compute_gradient(
         params (Dict[str, torch.Tensor]): Parameters of the model.
         pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         centered (bool, optional): Whether to use centered gradients. Defaults to True.
+        lambda_l1 (float, optional): L1 regularization weight. Defaults to 0.0.
+        lambda_l2 (float, optional): L2 regularization weight. Defaults to 0.0.
         eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
     """
     # Normalize the weights
@@ -58,6 +62,10 @@ def _compute_gradient(
         grad_hbias = h_data_mean - h_gen_mean - torch.einsum("lq, lqp -> p", v_data_mean, grad_weight_matrix)
         grad_lbias = l_data_mean - l_gen_mean - (grad_label_matrix @ h_data_mean)
         
+        # regularization
+        grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
+        grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
+        
     else:
         # Gradient
         grad_weight_matrix = (
@@ -71,6 +79,10 @@ def _compute_gradient(
         grad_vbias = v_data_mean - v_gen_mean
         grad_hbias = h_data_mean - h_gen_mean
         grad_lbias = l_data_mean - l_gen_mean
+        
+        # regularization
+        grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
+        grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
         
     # Attach the gradients to the parameters
     params["weight_matrix"].grad.set_(grad_weight_matrix)

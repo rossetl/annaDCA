@@ -55,14 +55,17 @@ def _sample(
     params: Dict[str, torch.Tensor],
     beta: float = 1.0,
     **kwargs,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
 
+    hidden = torch.zeros((visible.shape[0], params["hbias"].shape[0]), device=visible.device, dtype=visible.dtype)
+    hidden_mag = torch.zeros_like(hidden)
+    visible_mag = torch.zeros_like(visible)
     for _ in range(gibbs_steps):
-        hidden, _ = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        label, _ = _sample_labels(hidden=hidden, params=params, beta=beta)
-        visible, _ = _sample_visibles(hidden=hidden, params=params, beta=beta)
-    
-    return (visible, hidden, label)
+        hidden, hidden_mag = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
+        label, label_mag = _sample_labels(hidden=hidden, params=params, beta=beta)
+        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
+
+    return (visible, hidden, label, visible_mag, hidden_mag, label_mag)
 
 
 def _sample_conditioned(
@@ -71,13 +74,16 @@ def _sample_conditioned(
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
     beta: float = 1.0,
-) -> torch.Tensor:
-    
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    hidden = torch.zeros((visible.shape[0], params["hbias"].shape[0]), device=visible.device, dtype=visible.dtype)
+    hidden_mag = torch.zeros_like(hidden)
+    visible_mag = torch.zeros_like(visible)
     for _ in range(gibbs_steps):
-        hidden, _ = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        visible = _sample_visibles(hidden=hidden, params=params, beta=beta)
-    
-    return (visible, hidden)
+        hidden, hidden_mag = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
+        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
+
+    return (visible, hidden, visible_mag, hidden_mag)
 
 
 @torch.jit.script

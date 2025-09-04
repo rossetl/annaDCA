@@ -12,8 +12,8 @@ class annaRBM(ABC):
 
     def __init__(
         self,
-        params: Dict[str, torch.Tensor] = None,
-        device: Optional[torch.device] = "cpu",
+        params: Dict[str, torch.Tensor] | None = None,
+        device: Optional[torch.device] = torch.device("cpu"),
         dtype: Optional[torch.dtype] = torch.float32,
     ):
         if params is not None:
@@ -41,11 +41,13 @@ class annaRBM(ABC):
             annaRBM: annaRBM instance with the parameters moved to the specified device and/or dtype.
         """
         if device is not None:
-            self.params = {self.params[key].to(device) for key in self.params}
+            if self.params is not None:
+                self.params = {key: self.params[key].to(device) for key in self.params}
             self.device = device
 
         if dtype is not None:
-            self.params = {self.params[key].to(dtype) for key in self.params}
+            if self.params is not None:
+                self.params = {key: self.params[key].to(dtype) for key in self.params}
             self.dtype = dtype
         return self
 
@@ -70,7 +72,8 @@ class annaRBM(ABC):
         if dtype is None:
             dtype = self.dtype
             
-        return annaRBM(
+        # Cannot instantiate abstract class annaRBM, so use type(self) to instantiate the concrete subclass
+        return type(self)(
             params=self.params,
             device=device,
             dtype=dtype,
@@ -88,6 +91,8 @@ class annaRBM(ABC):
             filename (str): Path to the h5 archive where to store the model.
             num_updates (int): Number of updates performed so far.
         """
+        if self.params is None:
+            raise ValueError("Model parameters are not initialized.")
         _save_model(
             params=self.params,
             filename=filename,
@@ -100,19 +105,22 @@ class annaRBM(ABC):
         filename: str,
         device: torch.device,
         dtype: torch.dtype,
-        index: int = None,
+        index: int | None = None,
         set_rng_state: bool = False,
-    ) -> None:
+    ) -> int:
         """Loads the parameters of the annaRBM.
 
         Args:
             filename (str): Path to the h5 archive.
             device (torch.device): PyTorch device on which to load the parameters.
             dtype (torch.dtype): Dtype for the parameters.
-            index (int): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
+            index (int | None): Index of the machine to load. If None, the last machine is loaded. Defaults to None.
             set_rng_state (bool): Restore the random state at the given epoch (useful to restore training). Defaults to False.
+
+        Returns:
+            int: Number of model updates.
         """
-        self.params = _load_model(
+        num_updates, self.params = _load_model(
             filename=filename,
             device=device,
             dtype=dtype,
@@ -121,6 +129,8 @@ class annaRBM(ABC):
         )
         self.device = device
         self.dtype = dtype
+        
+        return num_updates
     
     
     @abstractmethod
@@ -283,6 +293,7 @@ class annaRBM(ABC):
         Returns:
             torch.Tensor: Conditional probability distribution of the visible units.
         """
+        pass
         
         
     def predict_labels(
@@ -307,7 +318,8 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Labels's probability distribution.
         """
         pass
-    
+
+
     @abstractmethod
     def update_weights_AIS(
         self,
@@ -409,6 +421,9 @@ class annaRBM(ABC):
         chains: Dict[str, torch.Tensor],
         pseudo_count: float = 0.0,
         centered: bool = True,
+        lambda_l1: float = 0.0,
+        lambda_l2: float = 0.0,
+        eta: float = 1.0
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it.
 
@@ -417,6 +432,9 @@ class annaRBM(ABC):
             chains (Dict[str, torch.Tensor]): Chains.
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
             centered (bool, optional): Centered gradient. Defaults to True.
+            lambda_l1 (float, optional): L1 regularization weight. Defaults to 0.0.
+            lambda_l2 (float, optional): L2 regularization weight. Defaults to 0.0.
+            eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
         """
         pass
         
@@ -452,6 +470,8 @@ class annaRBM(ABC):
         Returns:
             int: Number of visible units.
         """
+        if self.params is None:
+            raise ValueError("Model parameters are not initialized.")
         return self.params["vbias"].shape[0]
         
         
@@ -462,6 +482,8 @@ class annaRBM(ABC):
         Returns:
             int: Number of hidden units.
         """
+        if self.params is None:
+            raise ValueError("Model parameters are not initialized.")
         return self.params["hbias"].shape[0]
         
         
@@ -472,6 +494,8 @@ class annaRBM(ABC):
         Returns:
             int: Number of labels.
         """
+        if self.params is None:
+            raise ValueError("Model parameters are not initialized.")
         return self.params["lbias"].shape[0]
         
         

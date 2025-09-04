@@ -2,14 +2,15 @@ from typing import Dict
 
 import numpy as np
 import torch
+from torch.nn.functional import one_hot
 
 
 def _init_parameters(
     num_visibles: int,
     num_hiddens: int,
     num_labels: int,
-    frequencies_visibles: torch.Tensor = None,
-    frequencies_labels: torch.Tensor = None,
+    frequencies_visibles: torch.Tensor | None = None,
+    frequencies_labels: torch.Tensor | None = None,
     std_init: float = 1e-4,
     device: torch.device = torch.device("cpu"),
     dtype: torch.dtype = torch.float32,
@@ -85,11 +86,12 @@ def _init_chains(
         ml = torch.ones(
             size=(num_samples, num_labels),
             device=params["lbias"].device,
-            dtype=params["lbias"].dtype) / 2
+            dtype=params["lbias"].dtype) / num_labels
         
     visible = torch.bernoulli(mv)
-    label = torch.bernoulli(ml)
-    
+    # label is extracted from a multinomial
+    label = one_hot(torch.multinomial(ml, 1), num_classes=num_labels).to(params["weight_matrix"].dtype).squeeze(1)
+
     mh = torch.sigmoid((params["hbias"] + (visible @ params["weight_matrix"]) + (label @ params["label_matrix"])))
     hidden = torch.bernoulli(mh)
     

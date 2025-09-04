@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='annadca',
-    version='0.2.0',
+    version='0.2.1',
     author='Lorenzo Rosset, Aurélien Decelle, Beatriz Seoane, Francesco Zamponi, Martin Weigt',
     maintainer='Lorenzo Rosset',
     author_email='rosset.lorenzo@gmail.com',
@@ -24,6 +24,6 @@ setup(
         ],
     },
     install_requires=[
-        'adabmDCA>=0.4.3'
+        'adabmDCA>=0.5.0'
     ],
 )

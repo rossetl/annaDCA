@@ -1,6 +1,7 @@
 from typing import Optional, Dict
 import numpy as np
 
+import rbm
 import torch
 from adabmDCA.fasta import import_from_fasta, get_tokens
 from adabmDCA.functional import one_hot
@@ -102,7 +103,7 @@ class annaRBMcat(annaRBM):
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
         set_rng_state: bool = False,
-    ) -> None:
+    ) -> int:
         """Loads the parameters of the annaRBM.
 
         Args:
@@ -111,6 +112,9 @@ class annaRBMcat(annaRBM):
             device (torch.device): PyTorch device on which to load the parameters.
             dtype (torch.dtype): Dtype for the parameters.
             set_rng_state (bool): Restore the random state at the given epoch (useful to restore training). Defaults to False.
+
+        Returns:
+            int: Number of model updates.
         """
         return super().load(
             filename=filename,
@@ -273,12 +277,11 @@ class annaRBMcat(annaRBM):
 
         if visible.shape[0] != label.shape[0]:
             raise ValueError(f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same.")
-            num_samples = visible.shape[0]
-                
-        visible, hidden, label = _sample(gibbs_steps, visible, label, self.params, beta)
-        return {"visible": visible, "hidden": hidden, "label": label}
-    
-    
+
+        visible, hidden, label, visible_mag, hidden_mag, label_mag = _sample(gibbs_steps, visible, label, self.params, beta)
+        return {"visible": visible, "hidden": hidden, "label": label, "visible_mag": visible_mag, "hidden_mag": hidden_mag, "label_mag": label_mag}
+
+
     def sample_conditioned(
         self,
         gibbs_steps: int,
@@ -311,8 +314,8 @@ class annaRBMcat(annaRBM):
         else:
             if visible.shape[0] != num_samples:
                 raise ValueError(f"The number of visible units ({visible.shape[0]}) and targets ({num_samples}) must be the same.")
-        
-        visible, hidden = _sample_conditioned(
+
+        visible, hidden, visible_mag, hidden_mag = _sample_conditioned(
             gibbs_steps=gibbs_steps,
             label=targets,
             visible=visible,
@@ -320,12 +323,12 @@ class annaRBMcat(annaRBM):
             beta=beta,
         )
 
-        return {"visible": visible, "hidden": hidden}
-    
-    
+        return {"visible": visible, "hidden": hidden, "visible_mag": visible_mag, "hidden_mag": hidden_mag}
+
+
     def predict_labels(
         self,
-        visibles: torch.Tensor | np.ndarray,
+        visible: torch.Tensor | np.ndarray,
         beta: float = 1.0,
         **kwargs,
     ) -> torch.Tensor:
@@ -333,17 +336,17 @@ class annaRBMcat(annaRBM):
 
         Args:
             gibbs_steps (int): Number of Alternate Gibbs Sampling steps.
-            visibles (torch.Tensor | np.ndarray): Visible units.
+            visible (torch.Tensor | np.ndarray): Visible units.
             beta (float, optional): Inverse temperature. Defaults to 1.0.
 
         Returns:
             torch.Tensor: Labels's probability distribution: p(l|v).
         """
-        if isinstance(visibles, np.ndarray):
-            visibles = torch.tensor(visibles, device=self.device, dtype=self.dtype)
-        
+        if isinstance(visible, np.ndarray):
+            visible = torch.tensor(visible, device=self.device, dtype=self.dtype)
+
         p_labels = _predict_labels(
-            visible=visibles,
+            visible=visible,
             params=self.params,
             beta=beta,            
         )
@@ -351,6 +354,21 @@ class annaRBMcat(annaRBM):
         return p_labels
     
     
+    def get_pattern(self, label_idx: int) -> torch.Tensor:
+        """Returns the visible pattern associated to the given label index.
+
+        Args:
+            label_idx (int): Index of the label.
+
+        Returns:
+            torch.Tensor: Visible pattern of dimension (num_visibles, num_states) associated to the label.
+        """
+        mag_prototype = self.params["label_matrix"][label_idx]
+        pattern = (self.params["weight_matrix"] @ mag_prototype)
+        
+        return pattern
+
+
     def update_weights_AIS(
         self,
         prev_model: annaRBM,
@@ -367,6 +385,8 @@ class annaRBMcat(annaRBM):
         Returns:
             torch.Tensor: Log-weights at time t.
         """
+        if prev_model.params is None:
+            raise ValueError("Previous model parameters are not initialized.")
         return _update_weights_AIS(prev_model.params, self.params, chains, log_weights)
     
     
@@ -469,7 +489,7 @@ class annaRBMcat(annaRBM):
         if self.params is not None:
             hidden = self.sample_hiddens(visible, label)["hidden"]
         else:
-            hidden = None
+            hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
 
         return {"visible": visible, "hidden": hidden, "label": label}
     
@@ -480,6 +500,8 @@ class annaRBMcat(annaRBM):
         chains: Dict[str, torch.Tensor],
         pseudo_count: float = 0.0,
         centered: bool = True,
+        lambda_l1: float = 0.0,
+        lambda_l2: float = 0.0,
         eta: float = 1.0,
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it.
@@ -489,6 +511,8 @@ class annaRBMcat(annaRBM):
             chains (Dict[str, torch.Tensor]): Chains.
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
             centered (bool, optional): Centered gradient. Defaults to True.
+            lambda_l1 (float, optional): L1 regularization weight. Defaults to 0.0.
+            lambda_l2 (float, optional): L2 regularization weight. Defaults to 0.0.
             eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
         """
         _compute_gradient(
@@ -497,6 +521,8 @@ class annaRBMcat(annaRBM):
             params=self.params,
             pseudo_count=pseudo_count,
             centered=centered,
+            lambda_l1=lambda_l1,
+            lambda_l2=lambda_l2,
             eta=eta,
         )
         
@@ -515,7 +541,7 @@ class annaRBMcat(annaRBM):
         frequencies_visibles: torch.Tensor | None = None,
         frequencies_labels: torch.Tensor | None = None,
         std_init: float = 1e-4,
-        device: torch.device = "cpu",
+        device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ) -> None:
         """

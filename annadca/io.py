@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Tuple
 
 import h5py
 import numpy as np
@@ -51,7 +51,7 @@ def _load_model(
     dtype: torch.dtype,
     index: int | None = None,
     set_rng_state: bool = False,
-) -> Dict[str, torch.Tensor]:
+) -> Tuple[int, Dict[str, torch.Tensor]]:
     """Loads a RBM from an h5 archive.
 
     Args:
@@ -62,7 +62,7 @@ def _load_model(
         set_rng_state (bool, optional): Restore the random state at the given epoch (useful to restore training). Defaults to False.
 
     Returns:
-        Dict[str, torch.Tensor]: Parameters of the loaded model.
+        Tuple[int, Dict[str, torch.Tensor]]: Number of updates and parameters of the loaded model.
     """
     list_updates = get_saved_updates(filename)
     if index is None:
@@ -108,7 +108,7 @@ def _load_model(
         "lbias": lbias,
     }
     
-    return params
+    return index, params
 
 
 def _save_chains(
