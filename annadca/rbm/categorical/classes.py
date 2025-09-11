@@ -149,19 +149,17 @@ class annaRBMcat(annaRBM):
     def compute_energy_visibles(
         self,
         visible: torch.Tensor,
-        label: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
-        """Returns the energy of the model computed on the input visibles and labels.
+        """Returns the energy of the model computed on the input visibles.
 
         Args:
             visible (torch.Tensor): Visible units.
-            label (torch.Tensor): Labels.
 
         Returns:
             torch.Tensor: Energy of the data points.
         """
-        return _compute_energy_visibles(visible, label, self.params)
+        return _compute_energy_visibles(visible, self.params)
     
     
     def compute_energy_hiddens(
@@ -393,7 +391,6 @@ class annaRBMcat(annaRBM):
     def compute_log_likelihood(
         self,
         visible: torch.Tensor,
-        label: torch.Tensor,
         weight: torch.Tensor,
         logZ: float,
         **kwargs,
@@ -402,14 +399,13 @@ class annaRBMcat(annaRBM):
 
         Args:
             visible (torch.Tensor): Visible units.
-            label (torch.Tensor): Labels.
             weight (torch.Tensor): Weights of the sequences.
             logZ (float): Log partition function.
 
         Returns:
             float: Log-likelihood of the model on the given configuration.
         """
-        return _compute_log_likelihood(visible, label, weight, self.params, logZ)
+        return _compute_log_likelihood(visible, weight, self.params, logZ)
     
     
     def init_chains(

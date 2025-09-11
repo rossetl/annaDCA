@@ -22,7 +22,7 @@ def _compute_energy(
     return torch.vmap(_compute_energy_chain, in_dims=(0, 0, 0, None))(visible, hidden, label, params)
 
 
-def _compute_energy_visibles(
+def _compute_energy_visibles_labels(
     visible: torch.Tensor,
     label: torch.Tensor,
     params: Dict[str, torch.Tensor],
@@ -40,6 +40,26 @@ def _compute_energy_visibles(
         return - fields - log_term.sum()
     
     return torch.vmap(_compute_energy_chain, in_dims=(0, 0, None))(visible, label, params)
+
+
+def _compute_energy_visibles(
+    visible: torch.Tensor,
+    params: Dict[str, torch.Tensor],
+    **kwargs,
+) -> torch.Tensor:
+
+    def _compute_energy_chain(
+        visible: torch.Tensor,
+        params: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        fields = visible @ params["vbias"]
+        exponent = params["hbias"].unsqueeze(0) + \
+            + (visible @ params["weight_matrix"]).unsqueeze(0) + params["label_matrix"] # (num_classes, num_hiddens)
+        log_term = torch.where(exponent < 10, torch.log(1.0 + torch.exp(exponent)), exponent)
+        exponent_label_term = log_term.sum(1) + params["lbias"] # (num_classes,)
+        return - fields - torch.logsumexp(exponent_label_term, dim=0)
+
+    return torch.vmap(_compute_energy_chain, in_dims=(0, None))(visible, params)
 
 
 def _compute_energy_hiddens(
@@ -80,7 +100,6 @@ def _update_weights_AIS(
 
 def _compute_log_likelihood(
     visible: torch.Tensor,
-    label: torch.Tensor,
     weight: torch.Tensor,
     params: Dict[str, torch.Tensor],
     logZ: float,
@@ -88,7 +107,6 @@ def _compute_log_likelihood(
     
     energy_data = _compute_energy_visibles(
         visible=visible,
-        label=label,
         params=params,
     )
     mean_energy_data = (energy_data * weight.view(-1)).sum() / weight.sum()
