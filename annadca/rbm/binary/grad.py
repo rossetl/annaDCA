@@ -61,7 +61,7 @@ def _compute_gradient(
         
         # regularization
         grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
-        grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
+        #grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
 
     else:
         # Gradient
@@ -77,7 +77,7 @@ def _compute_gradient(
         
         # regularization
         grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
-        grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
+        #grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
 
     # Attach the gradients to the parameters
     params["weight_matrix"].grad.set_(grad_weight_matrix)

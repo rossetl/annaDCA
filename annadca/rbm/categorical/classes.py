@@ -1,10 +1,11 @@
 from typing import Optional, Dict
 import numpy as np
+from tqdm.autonotebook import tqdm
 
-import rbm
 import torch
 from adabmDCA.fasta import import_from_fasta, get_tokens
 from adabmDCA.functional import one_hot
+from adabmDCA.dca import get_seqid
 
 from annadca.classes import annaRBM
 from annadca.io import _save_chains
@@ -350,6 +351,107 @@ class annaRBMcat(annaRBM):
         )
         
         return p_labels
+    
+    
+    def compute_mixing_time(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor | None = None,
+        niter: int = 10000,
+        show_progress: bool = True,
+        log_every: int = 50,
+    ) -> Dict[str, list]:
+        """Computes the mixing time of the model using the t and t/2 method. If the mixing time is not reached within the maximum number of iterations,
+        it will return the results obtained so far. If 'label' is provided, the sampling will be conditioned on it.
+
+        Args:
+            visible (torch.Tensor): Visible variable initialization.
+            label (torch.Tensor | None, optional): Target labels. Defaults to None.
+            niter (int, optional): Maximum number of iterations. Defaults to 10000.
+            show_progress (bool, optional): Whether to show progress. Defaults to True.
+            log_every (int, optional): Logging frequency. Defaults to 50.
+
+        Returns:
+            Dict[str, list]: Mixing time results.
+        """
+        L = self.num_visibles()
+        if label is not None:
+            sampler_function = self.sample_conditioned
+        else:
+            sampler_function = self.sample
+    
+        torch.manual_seed(0)
+        
+        # Initialize chains at random
+        sample_t = self.init_chains(len(visible))
+        sample_t["visible"] = visible
+        if label is not None:
+            sample_t["label"] = label
+        # Copy sample_t to a new variable sample_t_half
+        sample_t_half = {k: v.clone() for k, v in sample_t.items()}
+    
+        # Initialize variables
+        results = {
+            "seqid_t": [],
+            "std_seqid_t": [],
+            "seqid_t_t_half": [],
+            "std_seqid_t_t_half": [],
+            "t_half": [],
+        }
+    
+        # Loop through sweeps
+        if show_progress:
+            pbar = tqdm(
+                total=niter,
+                colour="red",
+                dynamic_ncols=True,
+                leave=False,
+                ascii="-#",
+            )
+            pbar.set_description("Iterating until the mixing time is reached")
+    
+        for i in range(1, niter + 1):
+            if show_progress:
+                pbar.update(1)
+            # Set the seed to i
+            torch.manual_seed(i)
+            # Perform a sweep on sample_t
+            sample_t = sampler_function(gibbs_steps=1, **sample_t, targets=label)
+    
+            if i % 2 == 0:
+                # Set the seed to i/2
+                torch.manual_seed(i // 2)
+                # Perform a sweep on sample_t_half
+                sample_t_half = sampler_function(gibbs_steps=1, **sample_t_half, targets=label)
+    
+                if i % log_every == 0:
+                    # Calculate the average distance between sample_t and itself shuffled
+                    perm = torch.randperm(len(sample_t["visible"]))
+                    seqid_t, std_seqid_t = get_seqid(sample_t["visible"], sample_t["visible"][perm], average=True)
+                    seqid_t, std_seqid_t = seqid_t / L, std_seqid_t / L
+
+                    # Calculate the average distance between sample_t and sample_t_half
+                    seqid_t_t_half, std_seqid_t_t_half = get_seqid(sample_t["visible"], sample_t_half["visible"], average=True)
+                    seqid_t_t_half, std_seqid_t_t_half = seqid_t_t_half / L, std_seqid_t_t_half / L
+        
+                    # Store the results
+                    results["seqid_t"].append(seqid_t.item())
+                    results["std_seqid_t"].append(std_seqid_t.item())
+                    results["seqid_t_t_half"].append(seqid_t_t_half.item())
+                    results["std_seqid_t_t_half"].append(std_seqid_t_t_half.item())
+                    results["t_half"].append(i // 2)
+    
+                    # Check if they have crossed
+                    if torch.abs(seqid_t - seqid_t_t_half) / torch.sqrt(std_seqid_t**2 + std_seqid_t_t_half**2) < 0.1:
+                        break
+
+            if i == niter:
+                print(f"Mixing time not reached within {niter // 2} sweeps.")
+
+        if show_progress:
+            pbar.close()
+    
+        return results
     
     
     def get_pattern(self, label_idx: int) -> torch.Tensor:

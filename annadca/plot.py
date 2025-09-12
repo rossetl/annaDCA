@@ -64,3 +64,36 @@ def plot_PCA(
     
     fig.suptitle(title)
     return fig
+
+
+def plot_mixing_time(results: dict) -> plt.figure:
+    """Plot the mixing time of the model.
+    
+    Args:
+        results (dict): Dictionary containing the results of the resampling.
+        
+    Returns:
+        plt.figure: Matplotlib figure.
+    """
+    fig, ax = plt.subplots(figsize=(6, 4), dpi=96)
+    ax.plot(results["t_half"], results["seqid_t"], label=r"SeqID$(t)$", color="#002CFF")  # Blue
+    ax.fill_between(results["t_half"],
+                     np.array(results["seqid_t"]) - np.array(results["std_seqid_t"]),
+                     np.array(results["seqid_t"]) + np.array(results["std_seqid_t"]),
+                     color="#002CFF", alpha=0.2)
+    ax.plot(results["t_half"], results["seqid_t_t_half"], label=r"SeqID$(t, t/2)$", color="#67BAA6")  # Orange
+    ax.fill_between(results["t_half"],
+                     np.array(results["seqid_t_t_half"]) - np.array(results["std_seqid_t_t_half"]),
+                     np.array(results["seqid_t_t_half"]) + np.array(results["std_seqid_t_t_half"]),
+                     color="#67BAA6", alpha=0.2)
+    ax.set_xlabel(r"$t/2$ (Sweeps)")
+    ax.set_ylabel("Sequence Identity")
+    ax.legend(loc='upper right')
+    ax.set_title("Mixing time")
+
+
+    # Add annotation for mixing time
+    ax.annotate(r"$t^{\mathrm{mix}}=$" + f"{results['t_half'][-1]}", xy=(0.96, 0.7), xycoords='axes fraction', fontsize=15,
+                 verticalalignment='top', horizontalalignment='right', bbox=dict(facecolor='white', alpha=0.5))
+
+    return fig
