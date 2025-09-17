@@ -5,6 +5,13 @@ from typing import Optional, Tuple, Dict
 from torch.nn.functional import one_hot
 from torch.nn import Parameter
 from adabmDCA.fasta import write_fasta, get_tokens, import_from_fasta
+from adabmDCA.stats import get_freq_single_point, get_freq_two_points
+
+
+def zerosum_gauge(W: torch.Tensor) -> torch.Tensor:
+        """Applies the zero-sum gauge to the weight matrix of the model."""
+        return W - W.mean(1, keepdim=True)
+        
 
 class PottsLayer(Layer):
     def __init__(
@@ -58,18 +65,95 @@ class PottsLayer(Layer):
         return torch.nn.functional.one_hot(indices, num_classes=p.size(-1)).to(dtype=dtype)
 
 
-    def mm(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation between weight tensor W and input tensor x.
+    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
 
         Args:
             W (torch.Tensor): Weight tensor.
             x (torch.Tensor): Input tensor.
+            
         Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication.
+            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
+        """
+        return torch.einsum('nh,lqh->nlq', x, W)
+    
+    
+    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
+
+        Args:
+            W (torch.Tensor): Weight tensor.
+            x (torch.Tensor): Input tensor.
+            
+        Returns:
+            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
         """
         return torch.einsum('nlq,lqh->nh', x, W)
     
     
+    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific outer product operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor of shape (batch_size, l, q).
+            y (torch.Tensor): Second input tensor of shape (batch_size, h).
+        Returns:
+            torch.Tensor: Output tensor after layer-specific outer product.
+        """
+        return torch.einsum('nlq,nh->lqh', x, y)
+    
+    
+    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific element-wise multiplication operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor of shape (batch_size, l, q).
+            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
+
+        Returns:
+            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
+        """
+        return x * y.view(y.shape[0], 1, 1)
+    
+    
+    def get_freq_single_point(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ) -> torch.Tensor:
+        """Computes the single-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed single-point frequencies.
+        """
+        return get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
+    
+    
+    def get_freq_two_points(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0,
+    ) -> torch.Tensor:
+        """Computes the two-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed two-point frequencies.
+        """
+        return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
+
+
     def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from the layer's distribution given the activation input tensor.
 
@@ -156,6 +240,27 @@ class PottsLayer(Layer):
         visible = one_hot(torch.tensor(visible), len(tokens)).to(device=device, dtype=dtype)
         hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
         return {"visible": visible, "hidden": hidden, "label": label}
+    
+    
+    def apply_gradient(
+        self,
+        x_pos: torch.Tensor,
+        x_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ):
+        """Computes and applies the gradient to the layer parameters.
+
+        Args:
+            x_pos (torch.Tensor): Positive (data) samples tensor.
+            x_neg (torch.Tensor): Negative (generated) samples tensor.
+            weights (Optional[torch.Tensor], optional): Weights for the positive samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+        """
+        x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
+        x_neg_mean = get_freq_single_point(x_neg)
+        grad_bias = x_pos_mean - x_neg_mean
+        self.bias.grad = grad_bias
     
     
     def __repr__(self) -> str:

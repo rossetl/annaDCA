@@ -1,9 +1,36 @@
 from annadca.layers.layer import Layer
+from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
 import torch
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from torch.nn.functional import one_hot
+from annadca.layers.bernoulli import get_freq_single_point
+
+
+def get_rbm(
+    visible_type: str,
+    hidden_type: str,
+    visible_shape: int | Tuple[int, ...] | torch.Size,
+    hidden_shape: int | torch.Size,
+    num_classes: int,
+    **kwargs,
+) -> "AnnaRBM":
+    available_layers = {
+        "potts": PottsLayer,
+        "bernoulli": BernoulliLayer,
+    }
+    assert visible_type in available_layers, f"Unknown visible layer type: {visible_type}. Available types are: {list(available_layers.keys())}"
+    assert hidden_type in available_layers, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(available_layers.keys())}"
+    visible_layer = available_layers[visible_type](shape=visible_shape)
+    hidden_layer = available_layers[hidden_type](shape=hidden_shape)
+    return AnnaRBM(
+        visible_layer=visible_layer,
+        hidden_layer=hidden_layer,
+        num_classes=num_classes,
+        **kwargs
+    )
+
 
 class AnnaRBM(torch.nn.Module):
     def __init__(
@@ -26,10 +53,24 @@ class AnnaRBM(torch.nn.Module):
         self.num_classes = torch.Size((num_classes,))
         
         self.weight_matrix = Parameter(torch.randn(self.shape) * 1e-4, requires_grad=False)
-        self.label_matrix = Parameter(torch.randn(self.hidden_layer.shape + self.num_classes) * 1e-4, requires_grad=False)
+        self.label_matrix = Parameter(torch.randn(self.num_classes + self.hidden_layer.shape) * 1e-4, requires_grad=False)
         self.lbias = Parameter(torch.zeros((num_classes,)), requires_grad=False)
         
     
+    def init_from_frequencies(
+        self,
+        frequencies_visible: torch.Tensor,
+        frequencies_label: torch.Tensor,
+    ):
+        """Initializes the visible layer bias using the empirical frequencies of the dataset.
+
+        Args:
+            frequencies (torch.Tensor): Empirical frequencies tensor.
+        """
+        self.visible_layer.init_from_frequencies(frequencies_visible)
+        self.lbias.copy_(torch.log(frequencies_label / (1 - frequencies_label) + 1e-10))
+
+
     def init_chains(
         self,
         num_samples: int,
@@ -47,13 +88,51 @@ class AnnaRBM(torch.nn.Module):
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         chains = {}
-        chains["visible"] = self.visible_layer.init_chains(num_chains=num_samples, frequencies=frequencies)
-        chains["hidden"] = self.hidden_layer.init_chains(num_chains=num_samples)
+        chains["visible"] = self.visible_layer.init_chains(num_samples=num_samples, frequencies=frequencies)
+        chains["hidden"] = self.hidden_layer.init_chains(num_samples=num_samples)
         chains["label"] = torch.zeros((num_samples,) + self.num_classes, device=device, dtype=dtype)
         chains["visible_mag"] = torch.zeros((num_samples,) + self.visible_layer.shape, device=device, dtype=dtype)
         chains["hidden_mag"] = torch.zeros((num_samples,) + self.hidden_layer.shape, device=device, dtype=dtype)
         chains["label_mag"] = torch.zeros((num_samples,) + self.num_classes, device=device, dtype=dtype)
         return chains
+    
+    
+    def get_freq_single_point(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ) -> torch.Tensor:
+        """Computes the single-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed single-point frequencies.
+        """
+        return self.visible_layer.get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
+    
+    
+    def get_freq_two_points(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0,
+    ) -> torch.Tensor:
+        """Computes the two-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed two-point frequencies.
+        """
+        return self.visible_layer.get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
     def sample_visibles(
@@ -70,7 +149,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Sampled visible units and their probabilities.
         """
-        I_v = self.visible_layer.mm(self.weight_matrix, hidden)
+        I_v = self.visible_layer.mm_right(self.weight_matrix, hidden)
         return self.visible_layer.forward(I_v, beta)
 
 
@@ -90,7 +169,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Sampled hidden units and their probabilities.
         """
-        I_h = self.hidden_layer.mm(self.weight_matrix, visible) + label @ self.label_matrix
+        I_h = self.visible_layer.mm_left(self.weight_matrix, visible) + label @ self.label_matrix
         return self.hidden_layer.forward(I_h, beta)
     
     
@@ -162,9 +241,9 @@ class AnnaRBM(torch.nn.Module):
     def sample(
         self,
         gibbs_steps: int,
-        num_samples: int | None = None,
-        visible: torch.Tensor | None = None,
-        label: torch.Tensor | None = None,
+        num_samples: Optional[int] = None,
+        visible: Optional[torch.Tensor] = None,
+        label: Optional[torch.Tensor] = None,
         beta: float = 1.0,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
@@ -172,9 +251,9 @@ class AnnaRBM(torch.nn.Module):
 
         Args:
             gibbs_steps (int): Number of Gibbs sampling steps.
-            num_samples (int | None, optional): Number of samples to generate. If None, uses the batch size of the provided visible or label tensors. Defaults to None.
-            visible (torch.Tensor | None, optional): Initial visible units tensor. If None, initializes randomly. Defaults to None.
-            label (torch.Tensor | None, optional): Initial label units tensor. If None, initializes randomly. Defaults to None.
+            num_samples (int, optional): Number of samples to generate. If None, uses the batch size of the provided visible or label tensors. Defaults to None.
+            visible (torch.Tensor, optional): Initial visible units tensor. If None, initializes randomly. Defaults to None.
+            label (torch.Tensor, optional): Initial label units tensor. If None, initializes randomly. Defaults to None.
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
         """
         # Infer num_samples if possible
@@ -227,9 +306,9 @@ class AnnaRBM(torch.nn.Module):
         targets = targets.to(device=device, dtype=dtype)
         num_samples = targets.shape[0]
         if visible is None:
-            visible = self.visible_layer.init_chains(num_chains=num_samples)
+            visible = self.visible_layer.init_chains(num_samples=num_samples)
         assert visible.shape[0] == targets.shape[0], f"The number of visible units ({visible.shape[0]}) and target labels ({targets.shape[0]}) must be the same."
-        hidden = self.hidden_layer.init_chains(num_chains=num_samples)
+        hidden = self.hidden_layer.init_chains(num_samples=num_samples)
         hidden_prob = torch.zeros_like(hidden)
         visible_prob = torch.zeros_like(visible)
         
@@ -267,7 +346,7 @@ class AnnaRBM(torch.nn.Module):
         def _predict_labels_chain(
             v: torch.Tensor,
         ) -> torch.Tensor:
-            I_lh = self.visible_layer.mm(self.weight_matrix, v).unsqueeze(0) + self.label_matrix  # (num_classes, num_hiddens)
+            I_lh = self.visible_layer.mm_left(self.weight_matrix, v).unsqueeze(0) + self.label_matrix  # (num_classes, num_hiddens)
             log_term = self.hidden_layer.nonlinearity(I_lh)
             I_l = log_term.sum(1) + self.lbias  # (num_classes,)
             return torch.softmax(beta * I_l, dim=0)
@@ -302,7 +381,7 @@ class AnnaRBM(torch.nn.Module):
         """
         energy_visible = self.visible_layer.layer_energy(visible)
         energy_hidden = self.hidden_layer.layer_energy(hidden)
-        energy_interaction = - torch.sum(self.visible_layer.mm(self.weight_matrix, visible) * hidden, dim=-1)
+        energy_interaction = - torch.sum(self.visible_layer.mm_left(self.weight_matrix, visible) * hidden, dim=-1)
         energy_label = - torch.sum(hidden @ self.label_matrix.t() * label, dim=-1) - label @ self.lbias
         return energy_visible + energy_hidden + energy_interaction + energy_label
     
@@ -322,7 +401,7 @@ class AnnaRBM(torch.nn.Module):
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
         energy_fields = self.visible_layer.layer_energy(visible) - label @ self.lbias
-        I_h = self.visible_layer.mm(self.weight_matrix, visible) + label @ self.label_matrix
+        I_h = self.visible_layer.mm_left(self.weight_matrix, visible) + label @ self.label_matrix
         log_term = self.hidden_layer.nonlinearity(I_h)
         return energy_fields - log_term.sum(dim=-1)
     
@@ -343,9 +422,60 @@ class AnnaRBM(torch.nn.Module):
             v: torch.Tensor,
         ) -> torch.Tensor:
             energy_fields = self.visible_layer.layer_energy(v)
-            I_lh = self.visible_layer.mm(self.weight_matrix, v).unsqueeze(0) + self.label_matrix # (num_classes, num_hiddens)
+            I_lh = self.visible_layer.mm_left(self.weight_matrix, v).unsqueeze(0) + self.label_matrix # (num_classes, num_hiddens)
             log_term = self.hidden_layer.nonlinearity(I_lh)
             I_l = log_term.sum(1) + self.lbias  # (num_classes,)
             return energy_fields - torch.logsumexp(I_l, dim=0)
         
         return torch.vmap(_compute_energy_chain)(visible)
+    
+    
+    def apply_gradient(
+        self,
+        data: Dict[str, torch.Tensor],
+        chains: Dict[str, torch.Tensor],
+        pseudo_count: float = 0.0,
+        lambda_l1: float = 0.0,
+        lambda_l2: float = 0.0,
+    ) -> None:
+        """Applies the computed gradient to the model parameters.
+
+        Args:
+            data (Dict[str, torch.Tensor]): Data batch.
+            chains (Dict[str, torch.Tensor]): Chains.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+            lambda_l1 (float, optional): L1 regularization weight. Defaults to 0.0.
+            lambda_l2 (float, optional): L2 regularization weight. Defaults to 0.0.
+            eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
+        """
+        # Normalize the weights
+        data["weight"] = data["weight"] / data["weight"].sum()
+        nchains = len(chains["visible"])
+        
+        self.visible_layer.apply_gradient(
+            x_pos=data["visible"],
+            x_neg=chains["visible"],
+            weights=data["weight"],
+            pseudo_count=pseudo_count,
+        )
+        self.hidden_layer.apply_gradient(
+            x_pos=data["hidden"],
+            x_neg=chains["hidden"],
+            weights=data["weight"],
+            pseudo_count=pseudo_count,
+        )
+        
+        l_pos_mean = get_freq_single_point(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
+        l_neg_mean = chains["label"].mean(0)
+        grad_lbias = l_pos_mean - l_neg_mean
+        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(data["visible"], data["weight"]), data["hidden"]) - \
+                             self.visible_layer.outer(chains["visible"], chains["hidden"]) / nchains
+        grad_label_matrix = (data["label"] * data["weight"].view(nchains, 1)).T @ data["hidden"] - \
+                            (chains["label"].T @ chains["hidden"]) / nchains
+        
+        # Regularization
+        grad_weight_matrix -= lambda_l1 * self.weight_matrix.sign() + lambda_l2 * self.weight_matrix
+        
+        self.lbias.grad = grad_lbias
+        self.weight_matrix.grad = grad_weight_matrix
+        self.label_matrix.grad = grad_label_matrix

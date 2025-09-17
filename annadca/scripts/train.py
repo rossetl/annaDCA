@@ -1,5 +1,6 @@
 import argparse
 import os
+import shutil
 import numpy as np
 from tqdm import tqdm
 from itertools import cycle
@@ -10,15 +11,15 @@ import torch
 from torch.utils.data import DataLoader
 from torch.optim import SGD
 from adabmDCA.utils import get_device, get_dtype
-from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
 
 from annadca.parser import add_args_train
 from annadca.dataset import annaDataset
-from annadca import annaRBMbin, annaRBMcat
-from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
+from annadca.rbm import get_rbm
 from annadca.train import pcd
-from annadca.utils import get_saved_updates
+from annadca.utils import save_checkpoint
+from annadca.layers.bernoulli import get_freq_single_point
 
+warnings.filterwarnings("ignore", message="Not enough SMs to use max_autotune_gemm mode")
 
 # import command-line input arguments
 def create_parser():
@@ -52,7 +53,6 @@ if __name__ == '__main__':
     print(template.format("L1 regularization:", args.l1))
     print(template.format("L2 regularization:", args.l2))
     print(template.format("Profile initialization:", args.init_from_profile))
-    print(template.format("Labels contribution:", args.eta))
     if args.pseudocount is not None:
         print(template.format("Pseudocount:", args.pseudocount))
     print(template.format("Random seed:", args.seed))
@@ -60,7 +60,7 @@ if __name__ == '__main__':
     print("\n")
 
     # Check that input files exist
-    for path in [args.data, args.annotations, args.path_params, args.path_chains]:
+    for path in [args.data, args.annotations, args.checkpoint]:
         if path is not None and not os.path.exists(path):
             raise FileNotFoundError(f"Input file {path} not found.")
 
@@ -80,36 +80,43 @@ if __name__ == '__main__':
         device=device,
         dtype=dtype,
     )
+    data = dataset.data_one_hot
     tokens = dataset.tokens
     print(f"Alphabet: {dataset.tokens}")
     print(f"Dataset imported successfully: M={len(dataset)}, L={dataset.L}, q={dataset.q}.")
-    
+            
     # Create the folder where to save the model
     folder = args.output
     os.makedirs(folder, exist_ok=True)
-
+    
     if args.label is not None:
         file_paths = {
-            "log" : os.path.join(folder, f"{args.label}.log"),
-            "params" : os.path.join(folder, f"{args.label}_params.h5"),
-            "chains" : os.path.join(folder, f"{args.label}_chains.fasta")
+            "log": os.path.join(folder, f"{args.label}.log"),
+            "checkpoint": os.path.join(folder, f"{args.label}_checkpoints"),
         }
-        
     else:
         file_paths = {
-            "log" : os.path.join(folder, f"annaRBM.log"),
-            "params" : os.path.join(folder, f"params.h5"),
-            "chains" : os.path.join(folder, f"chains.fasta")
+            "log": os.path.join(folder, f"annaRBM.log"),
+            "checkpoint": os.path.join(folder, f"checkpoints"),
         }
+    
+    # Check if files already exist and delete them before creating new ones
+    if args.checkpoint is None:
+        log_path = file_paths["log"]
+        if os.path.exists(log_path):
+            confirm = input(f"File {log_path} already exists. Do you want to delete it? (y/n): ")
+            if confirm.lower() == "y":
+                os.remove(log_path)  # Use os.remove() for files
         
-    # Check if the files in file_paths already exist. If so, delete them
-    if args.path_params is None:
-        for path in file_paths.values():
-            if os.path.exists(path):
-                # Ask for confirmation before deleting
-                confirm = input(f"File {path} already exists. Do you want to delete it? (y/n): ")
-                if confirm.lower() == "y":
-                    os.remove(path)
+        # Handle checkpoint directory
+        checkpoint_path = file_paths["checkpoint"]
+        if os.path.exists(checkpoint_path):
+            confirm = input(f"Directory {checkpoint_path} already exists. Do you want to delete it? (y/n): ")
+            if confirm.lower() == "y":
+                shutil.rmtree(checkpoint_path)
+    
+    # Create subfolder for checkpoints
+    os.makedirs(file_paths["checkpoint"], exist_ok=True)
 
     # Save the weights if not already provided
     if args.weights is None and not args.no_reweighting:
@@ -135,75 +142,67 @@ if __name__ == '__main__':
     # Initialize the model and the chains
     num_visibles = dataset.get_num_residues()
     num_hiddens = args.hidden
-    num_labels = dataset.get_num_classes()
+    num_classes = dataset.get_num_classes()
     num_states = dataset.get_num_states()
+    
     if dataset.is_binary:
-        rbm = annaRBMbin()
-        data = dataset.data_one_hot
-        frequences_visible = get_freq_single_point_bin(
-            data=data,
-            weights=dataset.weights,
-            pseudo_count=args.pseudocount,
+        rbm = get_rbm(
+            visible_type="bernoulli",
+            hidden_type=args.potential,
+            visible_shape=num_visibles,
+            hidden_shape=num_hiddens,
+            num_classes=num_classes,
         )
+        rbm.to(device=device, dtype=dtype)
     elif not dataset.is_binary:
-        rbm = annaRBMcat()
-        data = dataset.data_one_hot
-        frequences_visible = get_freq_single_point_cat(
-            data=data,
-            weights=dataset.weights,
-            pseudo_count=args.pseudocount,
+        rbm = get_rbm(
+            visible_type="potts",
+            hidden_type=args.potential,
+            visible_shape=(num_visibles, num_states),
+            hidden_shape=num_hiddens,
+            num_classes=num_classes,
         )
-    frequency_labels = get_freq_single_point_bin(
+        rbm.to(device=device, dtype=dtype)
+        
+    frequences_visible = rbm.get_freq_single_point(
+        data=data,
+        weights=dataset.weights,
+        pseudo_count=args.pseudocount,
+    )
+    frequences_labels = get_freq_single_point(
         data=dataset.labels_one_hot,
         weights=dataset.weights,
         pseudo_count=args.pseudocount,
     )
 
-    if args.path_params is not None:
-        upd = rbm.load(
-            filename=args.path_params,
-            device=device,
-            dtype=dtype,
-            set_rng_state=True,
-        )
-        print("Model parameters loaded from", args.path_params)
+    if args.checkpoint is not None:
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        rbm.load_state_dict(checkpoint['model_state_dict'])
+        chains = checkpoint["chains"]
+        # Select the optimizer
+        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
+        if args.checkpoint is not None:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        upd = checkpoint['update']
+        print("Model parameters and chains loaded from", args.checkpoint)
+        
     else:
-        if args.init_from_profile:
-            init_frequences_visible = frequences_visible
-            init_frequences_labels = frequency_labels
-        else:
-            init_frequences_visible = None
-            init_frequences_labels = None
-            
-        rbm.init_parameters(
-            num_visibles=num_visibles,
-            num_hiddens=num_hiddens,
-            num_labels=num_labels,
-            num_states=num_states,
-            frequencies_visibles=init_frequences_visible,
-            frequencies_labels=init_frequences_labels,
-            std_init=1e-4,
-            device=device,
-            dtype=dtype,
-        )
-        upd = 0
-    
-    if args.path_chains is not None:
-        chains = rbm.load_chains(
-            filename=args.path_chains,
-            device=device,
-            dtype=dtype,
-            alphabet=tokens,
-        )
-        print("Chains loaded from", args.path_chains)
-    else:
+        if args.init_from_profile:            
+            rbm.init_from_frequencies(
+                frequencies_visible=frequences_visible,
+                frequencies_label=frequences_labels,
+            )
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
-        chains = rbm.init_chains(num_samples=args.nchains, use_profile=True)
+        chains = rbm.init_chains(num_samples=args.nchains, frequencies=frequences_visible)
+        # Select the optimizer
+        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
+        for key, value in rbm.named_parameters():
+            value.grad = torch.zeros_like(value)
+        upd = 0
         
     print("\n")
-    # Save the hyperparameters of the model
     template = "{0:<20} {1:<10}\n"  
     with open(file_paths["log"], "w") as f:
         if args.label is not None:
@@ -223,19 +222,11 @@ if __name__ == '__main__':
         f.write(template.format("profile init:", args.init_from_profile))
         f.write(template.format("l1 strength:", args.l1))
         f.write(template.format("l2 strength:", args.l2))
-        f.write(template.format("eta:", args.eta))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
         template = "{0:<10} {1:<10}\n"
         f.write(template.format("Epoch", "Time [s]"))
-        
-    # Initialize gradients for the parameters
-    for key, value in rbm.params.items():
-        value.grad = torch.zeros_like(value)
 
-    # Select the optimizer
-    optimizer = SGD(rbm.params.values(), lr=args.lr, maximize=True)
-    
     # Initialize the dataloader
     dataloader = DataLoader(
         dataset,
@@ -247,21 +238,22 @@ if __name__ == '__main__':
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
     dataloader = cycle(dataloader)
     
-    # Initialize the variables for the log-likelihood estimation
-    logZ = rbm.logZ0()
-    log_weights = torch.zeros(args.nchains, device=device, dtype=dtype)
-    log_likelihood = rbm.compute_log_likelihood(
-        visible=data,
-        label=dataset.labels_one_hot,
-        weight=dataset.weights,
-        logZ=logZ,
-    )
+    # compile the key functions of the model if torch version >= 2.0.0
+    if torch.__version__ >= "2.0.0":
+        print("Compiling the model...")
+        torch.set_float32_matmul_precision('high')  # Uses TF32
+        rbm.sample = torch.compile(rbm.sample)
+        rbm.apply_gradient = torch.compile(rbm.apply_gradient)
+        print("Model compiled successfully.")
+    print("\n")
     
     # Train the model
     start = time.time()
     pbar = tqdm(initial=upd, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
     if upd == 0:
-        rbm.save(filename=file_paths["params"], num_updates=upd)
+        save_checkpoint(rbm, chains, optimizer, upd, save_dir=file_paths["checkpoint"])
+    
+    rbm.train()
     with torch.no_grad():
         while upd < args.nepochs:
             upd += 1
@@ -277,45 +269,21 @@ if __name__ == '__main__':
                 chains=chains,
                 gibbs_steps=args.gibbs_steps,
                 pseudo_count=args.pseudocount,
-                centered=(not args.uncentered),
                 lambda_l1=args.l1,
                 lambda_l2=args.l2,
-                eta=args.eta,
             )
 
             # Update the parameters
             optimizer.step()
-            
-            # Set the gauge of the weights
-            rbm.zerosum_gauge()
 
-            if upd % 1000 == 0:
-                rbm.save(
-                    filename=file_paths["params"],
-                    num_updates=upd,
-                )
-                rbm.save_chains(
-                    filename=file_paths["chains"],
-                    visible=chains["visible"],
-                    label=chains["label"],
-                    alphabet=dataset.tokens,
-                )
+            if upd % 5000 == 0:
+                save_checkpoint(rbm, chains, optimizer, upd, save_dir=file_paths["checkpoint"])
                 with open(file_paths["log"], "a") as f:
                     f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
         pbar.close()
         
-        # Save the final model and chains if upd is not present in the h5 archive
-        saved_updates = get_saved_updates(file_paths["params"])
-        if upd not in saved_updates:
-            rbm.save(
-                filename=file_paths["params"],
-                num_updates=upd,
-            )
-            rbm.save_chains(
-                filename=file_paths["chains"],
-                visible=chains["visible"],
-                label=chains["label"],
-                alphabet=dataset.tokens,
-            )
-            with open(file_paths["log"], "a") as f:
-                f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
+    # Save the final model if not already saved
+    if upd % 5000 != 0:
+        save_checkpoint(rbm, chains, optimizer, upd, save_dir=file_paths["checkpoint"])
+        with open(file_paths["log"], "a") as f:
+            f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))

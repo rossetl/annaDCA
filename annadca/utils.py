@@ -2,6 +2,7 @@ import numpy as np
 from typing import List, Tuple
 import h5py
 import torch
+import os
 
 
 def _complete_labels(
@@ -163,3 +164,22 @@ def mutual_information(
     Iil = fil * (torch.log(1e-8 + fil) - torch.log(1e-8 + (fl.unsqueeze(1) @ fi.unsqueeze(0))))
     
     return Iil
+
+
+def save_checkpoint(model, chains, optimizer, update, save_dir="checkpoints"):
+    """Save model checkpoint with epoch number."""
+    
+    # Create directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+    
+    checkpoint = {
+        'update': update,
+        'model_state_dict': model.state_dict(),
+        "chains": chains,
+        'optimizer_state_dict': optimizer.state_dict(),
+    }
+
+    # Save with update number in filename
+    filename = f"model_update_{update:03d}.pt"
+    filepath = os.path.join(save_dir, filename)
+    torch.save(checkpoint, filepath)

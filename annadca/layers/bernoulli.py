@@ -1,9 +1,46 @@
 from annadca.layers.layer import Layer
 import torch
 import numpy as np
-from typing import List, Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
-from adabmDCA.fasta import import_from_fasta, write_fasta, get_tokens
+from adabmDCA.fasta import import_from_fasta, write_fasta
+
+
+def get_freq_single_point(
+    data: torch.Tensor,
+    weights: Optional[torch.Tensor] = None,
+    pseudo_count: float = 0.0,
+) -> torch.Tensor:    
+    M = len(data)
+    if weights is not None:
+        norm_weights = weights.reshape(M, 1) / weights.sum()
+    else:
+        norm_weights = torch.ones((M, 1), device=data.device) / M
+    frequencies = (data * norm_weights).sum(dim=0)
+    return (1. - pseudo_count) * frequencies + (pseudo_count / 2)
+
+
+def get_freq_two_points(
+    data: torch.Tensor,
+    weights: Optional[torch.Tensor] = None,
+    pseudo_count: float = 0.0,
+) -> torch.Tensor:
+    M = data.shape[0]
+    if weights is not None:
+        norm_weights = weights.reshape(M, 1) / weights.sum()
+    else:
+        norm_weights = torch.ones((M, 1), device=data.device) / M
+    
+    fij = (data * norm_weights).T @ data
+    # Apply the pseudo count
+    fij = (1. - pseudo_count) * fij + (pseudo_count / 4)
+    # Diagonal terms must represent the single point frequencies
+    fi = get_freq_single_point(data, weights, pseudo_count).ravel()
+    # Apply the pseudo count on the single point frequencies
+    fij_diag = (1. - pseudo_count) * fi + (pseudo_count / 2)
+    # Set the diagonal terms of fij to the single point frequencies
+    fij = torch.diagonal_scatter(fij, fij_diag, dim1=0, dim2=1)
+    return fij
 
 
 class BernoulliLayer(Layer):
@@ -43,26 +80,103 @@ class BernoulliLayer(Layer):
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
         """
-        if frequencies is None:
-            frequencies = torch.full(self.shape, 0.5)
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
+        if frequencies is None:
+            frequencies = torch.full(self.shape, 0.5, device=device, dtype=dtype)
+        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
         return torch.bernoulli(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype))
 
 
-    def mm(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation between weight tensor W and visible input tensor x.
+    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
 
         Args:
             W (torch.Tensor): Weight tensor.
             x (torch.Tensor): Input tensor.
+            
         Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication.
+            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
+        """
+        return x @ W.t()
+    
+    
+    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
+
+        Args:
+            W (torch.Tensor): Weight tensor.
+            x (torch.Tensor): Input tensor.
+            
+        Returns:
+            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
         """
         return x @ W
     
     
+    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific outer product operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor of shape (batch_size, l).
+            y (torch.Tensor): Second input tensor of shape (batch_size, h).
+        Returns:
+            torch.Tensor: Output tensor after layer-specific outer product.
+        """
+        return torch.einsum("nl,nh->lh", x, y)
+
+
+    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific element-wise multiplication operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor of shape (batch_size, l).
+            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
+
+        Returns:
+            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
+        """
+        return x * y.view(y.shape[0], 1)
+    
+    
+    def get_freq_single_point(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ) -> torch.Tensor:
+        """Computes the single-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed single-point frequencies.
+        """
+        return get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
+    
+    
+    def get_freq_two_points(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0,
+    ) -> torch.Tensor:
+        """Computes the two-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed two-point frequencies.
+        """
+        return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
+
+
     def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from the layer's distribution given the activation input tensor.
 
@@ -155,5 +269,18 @@ class BernoulliLayer(Layer):
         return {"visible": visible, "hidden": hidden, "label": label}
     
     
+    def apply_gradient(
+        self,
+        x_pos: torch.Tensor,
+        x_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ):
+        x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
+        x_neg_mean = x_neg.mean(0)
+        grad_bias = x_pos_mean - x_neg_mean
+        self.bias.grad = grad_bias
+        
+
     def __repr__(self) -> str:
         return f"BernoulliLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

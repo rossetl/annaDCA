@@ -10,7 +10,7 @@ class Layer(ABC, torch.nn.Module):
         **kwargs
     ):
         super(Layer, self).__init__()
-        assert isinstance(shape, int) or isinstance(shape, torch.Size) or (isinstance(shape, tuple) and len(shape) == 1), "Shape must be an integer or a tuple of one integer for Bernoulli layer."
+        assert isinstance(shape, int) or isinstance(shape, torch.Size) or (isinstance(shape, tuple) and len((shape,)) == 1), "Shape must be an integer or a tuple of one integer"
         self.shape = torch.Size(shape) if isinstance(shape, tuple) else torch.Size((shape,))
         self.kwargs = kwargs
         
@@ -18,13 +18,13 @@ class Layer(ABC, torch.nn.Module):
     @abstractmethod
     def init_chains(
         self,
-        num_chains: Optional[int] = None,
+        num_samples: Optional[int] = None,
         frequencies: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
-            num_chains (int): Number of Markov chains to initialize. Ignored if `frequencies` is provided.
+            num_samples (int): Number of Markov chains to initialize. Ignored if `frequencies` is provided.
             frequencies (torch.Tensor, optional): Empirical frequencies tensor to initialize the chains. If provided, `num_chains` is ignored.
 
         Returns:
@@ -48,19 +48,99 @@ class Layer(ABC, torch.nn.Module):
     
 
     @abstractmethod
-    def mm(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation between weight tensor W and input tensor x.
+    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication W @ x operation between weight tensor W and input tensor x.
 
         Args:
             W (torch.Tensor): Weight tensor.
             x (torch.Tensor): Input tensor.
 
         Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication.
+            torch.Tensor: Output tensor after layer-specific matrix multiplication W @ x.
         """
         pass
     
     
+    @abstractmethod
+    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """Layer-specific matrix multiplication x @ W operation between weight tensor W and input tensor x.
+
+        Args:
+            W (torch.Tensor): Weight tensor.
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Output tensor after layer-specific matrix multiplication x @ W.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific outer product operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor.
+            y (torch.Tensor): Second input tensor.
+        Returns:
+            torch.Tensor: Output tensor after layer-specific outer product.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """Layer-specific element-wise multiplication operation between input tensors x and y.
+
+        Args:
+            x (torch.Tensor): First input tensor.
+            y (torch.Tensor): Second input tensor.
+        Returns:
+            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def get_freq_single_point(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ) -> torch.Tensor:
+        """Computes the single-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed single-point frequencies.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def get_freq_two_points(
+        self,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ) -> torch.Tensor:
+        """Computes the two-point frequencies of the input tensor.
+
+        Args:
+            data (torch.Tensor): Input tensor.
+            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed two-point frequencies.
+        """
+        pass
+
+
     @abstractmethod
     def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
         """Samples from the layer's distribution given the activation input tensor.
@@ -136,5 +216,26 @@ class Layer(ABC, torch.nn.Module):
 
         Returns:
             Dict[str, torch.Tensor]: Loaded configurations dictionary.
+        """
+        pass
+    
+    
+    def apply_gradient(
+        self,
+        x_pos: torch.Tensor,
+        x_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ):
+        """Computes the gradient of the layer parameters using to the positive (data) and negative (generated) samples.
+
+        Args:
+            x_pos (torch.Tensor): Positive samples tensor.
+            x_neg (torch.Tensor): Negative samples tensor.
+            weights (torch.Tensor, optional): Weights for the positive samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Computed gradient tensor.
         """
         pass
