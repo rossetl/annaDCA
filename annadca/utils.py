@@ -27,14 +27,13 @@ def _complete_labels(
             name_to_label[n] = None
         else:
             name_to_label[n] = dict_labels[n]
-    
     return name_to_label
 
 
 def _encode_labels(
     dict_labels: dict,
     start_idx: int,
-) -> Tuple[dict, np.array]:
+) -> Tuple[dict, np.ndarray]:
     """Take a dictionary of 'name -> label' and return a dictionary of 'label -> one-hot index' and a one-hot encoded array of labels.
     When the label is marked as 'None', it is represented with an array of zeros.
 
@@ -56,18 +55,17 @@ def _encode_labels(
     one_hot_labels = one_hot_transform[numeric_labels]
     # Shift index to start_idx and subtract 1 to account for the None label
     label_to_index = {k: (v - 1 + start_idx) for k, v in label_to_index.items() if k != None}
-    
     return label_to_index, one_hot_labels
 
 
-def _parse_labels(labels_dict_list: List[dict]) -> Tuple[dict, np.array]:
+def _parse_labels(labels_dict_list: List[dict]) -> Tuple[dict, np.ndarray]:
     """Parse a list of dictionaries of labels and return a dictionary of label to index and a one-hot encoded array of labels.
 
     Args:
         labels_dict_list (List[dict]): List of dictionaries of labels.
 
     Returns:
-        Tuple[dict, np.array]: Dictionary of label to index in the one-hot encoding and one-hot encoded array of labels.
+        Tuple[dict, np.ndarray]: Dictionary of label to index in the one-hot encoding and one-hot encoded array of labels.
     """
     start_idx = 0
     label_to_idx = {}
@@ -80,30 +78,11 @@ def _parse_labels(labels_dict_list: List[dict]) -> Tuple[dict, np.array]:
         start_idx += len(label_to_idx_)
     
     one_hot_labels = np.concatenate(one_hot_labels, axis=1)
-    
     return label_to_idx, one_hot_labels
 
 
-def get_saved_updates(filename: str) -> np.ndarray:
-    """Returns the list of indices of the saved updates in the h5 archive.
-
-    Args:
-        filename (str): Path to the h5 archive.
-
-    Returns:
-        np.ndarray: Array of the indices of the saved updates.
-    """
-    updates = []
-    with h5py.File(filename, "r") as f:
-        for key in f.keys():
-            if "update" in key:
-                update = int(key.replace("update_", ""))
-                updates.append(update)
-    return np.sort(np.array(updates))
-
-
 def get_eigenvalues_history(
-    filename: str,
+    checkpoints_repo: str,
     target_matrix: str,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
@@ -111,7 +90,7 @@ def get_eigenvalues_history(
     """For each update in the file, return the eigenvalues of the target matrix.
     
     Args:
-        filename (str): The filename of the h5 file containing the model.
+        checkpoints_repo (str): The repository where the checkpoints are stored.
         target_matrix (str): The matrix for which to compute the eigenvalues. Must be either 'weight_matrix' or 'label_matrix'.
         device (torch.device): The device on which to compute the eigenvalues.
         dtype (torch.dtype): The dtype of the eigenvalues.
@@ -122,24 +101,22 @@ def get_eigenvalues_history(
     """
     if target_matrix not in ["weight_matrix", "label_matrix"]:
         raise ValueError("target_matrix must be either 'weight_matrix' or 'label_matrix'")
-    f = h5py.File(filename, 'r')
     updates = []
     eigenvalues = []
-    for key in f.keys():
-        if "update" in key:
-            matrix = f[key][f"{target_matrix}"][()]
-            matrix = torch.tensor(matrix, device=device, dtype=dtype)
-            matrix = matrix.reshape(-1, matrix.shape[-1])
-            eig = torch.linalg.svdvals(matrix).cpu().numpy()
-            eigenvalues.append(eig.reshape(*eig.shape, 1))
-            updates.append(int(key.split("_")[1]))
+    for checkpoint_file in os.listdir(checkpoints_repo):
+        checkpoint = torch.load(os.path.join(checkpoints_repo, checkpoint_file), map_location=device)
+        model_params = checkpoint['model_state_dict']
+        update = checkpoint['update']
+        matrix = model_params[target_matrix].to(device=device, dtype=dtype)
+        matrix = matrix.reshape(-1, matrix.shape[-1])
+        eig = torch.linalg.svdvals(matrix).cpu().numpy()
+        eigenvalues.append(eig.reshape(*eig.shape, 1))
+        updates.append(update)
     
     # Sort the results
     sorting = np.argsort(updates)
     updates = np.array(updates)[sorting]
-    eigenvalues = np.array(np.hstack(eigenvalues).T)[sorting]
-    f.close()
-            
+    eigenvalues = np.array(np.hstack(eigenvalues).T)[sorting]     
     return updates, eigenvalues
 
 
@@ -164,22 +141,3 @@ def mutual_information(
     Iil = fil * (torch.log(1e-8 + fil) - torch.log(1e-8 + (fl.unsqueeze(1) @ fi.unsqueeze(0))))
     
     return Iil
-
-
-def save_checkpoint(model, chains, optimizer, update, save_dir="checkpoints"):
-    """Save model checkpoint with epoch number."""
-    
-    # Create directory if it doesn't exist
-    os.makedirs(save_dir, exist_ok=True)
-    
-    checkpoint = {
-        'update': update,
-        'model_state_dict': model.state_dict(),
-        "chains": chains,
-        'optimizer_state_dict': optimizer.state_dict(),
-    }
-
-    # Save with update number in filename
-    filename = f"model_update_{update:03d}.pt"
-    filepath = os.path.join(save_dir, filename)
-    torch.save(checkpoint, filepath)

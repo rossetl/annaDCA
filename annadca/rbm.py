@@ -1,10 +1,11 @@
+import os
+from typing import Optional, Tuple, Dict
+import torch
+from torch.nn import Parameter
+from torch.nn.functional import one_hot
 from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
-import torch
-from typing import Optional, Tuple, Dict
-from torch.nn import Parameter
-from torch.nn.functional import one_hot
 from annadca.layers.bernoulli import get_freq_single_point
 
 
@@ -30,6 +31,27 @@ def get_rbm(
         num_classes=num_classes,
         **kwargs
     )
+    
+
+def save_checkpoint(model, chains, optimizer, update, save_dir="checkpoints"):
+    """Save model checkpoint with epoch number."""
+    
+    # Create directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+    
+    checkpoint = {
+        'update': update,
+        'model_state_dict': model.state_dict(),
+        "chains": chains,
+        'optimizer_state_dict': optimizer.state_dict(),
+        "shape": model.shape,
+        "num_classes": model.num_classes,
+    }
+
+    # Save with update number in filename
+    filename = f"model_update_{update:03d}.pt"
+    filepath = os.path.join(save_dir, filename)
+    torch.save(checkpoint, filepath)
 
 
 class AnnaRBM(torch.nn.Module):
@@ -343,15 +365,11 @@ class AnnaRBM(torch.nn.Module):
         dtype = next(self.parameters()).dtype
         visible = visible.to(device=device, dtype=dtype)
         
-        def _predict_labels_chain(
-            v: torch.Tensor,
-        ) -> torch.Tensor:
-            I_lh = self.visible_layer.mm_left(self.weight_matrix, v).unsqueeze(0) + self.label_matrix  # (num_classes, num_hiddens)
-            log_term = self.hidden_layer.nonlinearity(I_lh)
-            I_l = log_term.sum(1) + self.lbias  # (num_classes,)
-            return torch.softmax(beta * I_l, dim=0)
-        
-        return torch.vmap(_predict_labels_chain)(visible)
+        I_lh = self.visible_layer.mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0)  # (batch_size, num_classes, num_hiddens)
+        log_term = self.hidden_layer.nonlinearity(I_lh)
+        I_l = log_term.sum(-1)
+        p_l = torch.softmax(beta * (I_l + self.lbias.unsqueeze(0)), dim=-1)
+        return p_l
     
     
     def get_patterns(self) -> torch.Tensor:
@@ -418,16 +436,24 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
-        def _compute_energy_chain(
-            v: torch.Tensor,
-        ) -> torch.Tensor:
-            energy_fields = self.visible_layer.layer_energy(v)
-            I_lh = self.visible_layer.mm_left(self.weight_matrix, v).unsqueeze(0) + self.label_matrix # (num_classes, num_hiddens)
-            log_term = self.hidden_layer.nonlinearity(I_lh)
-            I_l = log_term.sum(1) + self.lbias  # (num_classes,)
-            return energy_fields - torch.logsumexp(I_l, dim=0)
+        energy_fields = self.visible_layer.layer_energy(visible)
+        I_lh = self.visible_layer.mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0) # (batch_size, num_classes, num_hiddens)
+        log_term = self.hidden_layer.nonlinearity(I_lh)
+        I_l = log_term.sum(-1)  # (batch_size, num_classes)
+        return energy_fields - torch.logsumexp(self.lbias.unsqueeze(0) + I_l, dim=-1)
         
-        return torch.vmap(_compute_energy_chain)(visible)
+    
+    def compute_energy_hiddens(
+        self,
+        hidden: torch.Tensor,
+        **kwargs,
+    ) -> torch.Tensor:
+        energy_hidden = self.hidden_layer.layer_energy(hidden)
+        I_v = self.visible_layer.mm_right(self.weight_matrix, hidden) # (batch_size, num_visibles, num_states)
+        I_l = hidden @ self.label_matrix.T # (batch_size, num_classes)
+        energy_visibles = - self.visible_layer.nonlinearity(I_v).sum(dim=-1)
+        energy_labels = - torch.logsumexp(self.lbias.unsqueeze(0) + I_l, dim=-1)
+        return energy_hidden + energy_visibles + energy_labels
     
     
     def apply_gradient(

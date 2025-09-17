@@ -171,14 +171,14 @@ class PottsLayer(Layer):
     
     
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
-        """Computes the non-linear activation function for the layer.
+        """Computes the non-linear activation function for the layer: x -> logsumexp(x + bias).
 
         Args:
             x (torch.Tensor): Input tensor.
         Returns:
-            torch.Tensor: Output tensor after applying the non-linear activation function.
+            torch.Tensor: Output tensor after applying the non-linear activation function: x -> logsumexp(x + bias).
         """
-        raise NotImplementedError("Nonlinearity is not implemented for Potts layer.")
+        return torch.logsumexp(x + self.bias, dim=-1)
     
     
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:

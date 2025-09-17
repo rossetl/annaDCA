@@ -6,17 +6,14 @@ from tqdm import tqdm
 from itertools import cycle
 import time
 import warnings
-
 import torch
 from torch.utils.data import DataLoader
 from torch.optim import SGD
 from adabmDCA.utils import get_device, get_dtype
-
 from annadca.parser import add_args_train
 from annadca.dataset import annaDataset
-from annadca.rbm import get_rbm
+from annadca.rbm import get_rbm, save_checkpoint
 from annadca.train import pcd
-from annadca.utils import save_checkpoint
 from annadca.layers.bernoulli import get_freq_single_point
 
 warnings.filterwarnings("ignore", message="Not enough SMs to use max_autotune_gemm mode")
