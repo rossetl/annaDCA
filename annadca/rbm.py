@@ -6,6 +6,7 @@ from torch.nn.functional import one_hot
 from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
+from annadca.layers.relu import ReLULayer
 from annadca.layers.bernoulli import get_freq_single_point
 
 
@@ -20,6 +21,7 @@ def get_rbm(
     available_layers = {
         "potts": PottsLayer,
         "bernoulli": BernoulliLayer,
+        "relu": ReLULayer,
     }
     assert visible_type in available_layers, f"Unknown visible layer type: {visible_type}. Available types are: {list(available_layers.keys())}"
     assert hidden_type in available_layers, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(available_layers.keys())}"
@@ -456,6 +458,21 @@ class AnnaRBM(torch.nn.Module):
         return energy_hidden + energy_visibles + energy_labels
     
     
+    def average_activity_hidden(
+        self,
+        I: torch.Tensor,
+    ) -> torch.Tensor:
+        """Computes the average activity of the hidden layer given the activation input tensor: <h | I>.
+
+        Args:
+            I (torch.Tensor): Activation input tensor.
+
+        Returns:
+            torch.Tensor: Average activity of the hidden layer.
+        """
+        return self.hidden_layer.average_activity(I)
+    
+    
     def apply_gradient(
         self,
         data: Dict[str, torch.Tensor],
@@ -485,7 +502,7 @@ class AnnaRBM(torch.nn.Module):
             pseudo_count=pseudo_count,
         )
         self.hidden_layer.apply_gradient(
-            x_pos=data["hidden"],
+            x_pos=data["hidden"], # these are actually the hidden activation inputs
             x_neg=chains["hidden"],
             weights=data["weight"],
             pseudo_count=pseudo_count,

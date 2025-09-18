@@ -27,12 +27,8 @@ def pcd(
     Returns:
         Dict[str, torch.Tensor]: Updated chains.
     """
-    # Compute the hidden magnetization of the data
-    data_batch["hidden"] = rbm.sample_hiddens(
-        visible=data_batch["visible"],
-        label=data_batch["label"],
-        beta=1.0
-    )[1]
+    I_h = rbm.visible_layer.mm_left(rbm.weight_matrix, data_batch["visible"]) + data_batch["label"] @ rbm.label_matrix
+    data_batch["hidden"], _ = rbm.hidden_layer.forward(I_h, beta=1.0)
 
     # Compute the gradient of the Log-Likelihood
     rbm.apply_gradient(

@@ -4,18 +4,20 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.functions import get_freq_single_point, get_freq_two_points
+from annadca.functions import get_freq_single_point, get_freq_two_points, phi, truncated_normal, sample_truncated_normal
+from torch.nn.functional import relu
 
 
-class BernoulliLayer(Layer):
+class ReLULayer(Layer):
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
         **kwargs
     ):
         super().__init__(shape=shape, **kwargs)
-        assert len(self.shape) == 1, f"Bernoulli layer shape must be one-dimensional, got {self.shape}."
+        assert len(self.shape) == 1, f"ReLu layer shape must be one-dimensional, got {self.shape}."
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
+        self.scale = Parameter(torch.ones(self.shape), requires_grad=False)
 
 
     def init_from_frequencies(
@@ -27,8 +29,7 @@ class BernoulliLayer(Layer):
         Args:
             frequencies (torch.Tensor): Empirical frequencies tensor.
         """
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        self.bias.copy_(torch.log(frequencies / (1 - frequencies) + 1e-10))
+        raise NotImplementedError("Initialization from frequencies not implemented for ReLU layer.")
 
 
     def init_chains(
@@ -152,13 +153,19 @@ class BernoulliLayer(Layer):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
         """
-        p = torch.sigmoid(beta * (I + self.bias))
-        x = torch.bernoulli(p)
+        mu = (I - self.bias) / self.scale
+        sigma = 1.0 / (beta * self.scale)
+        a = torch.zeros_like(mu)
+        b = torch.full_like(mu, float('inf'))
+        x = sample_truncated_normal(mu, sigma, a, b)
+        if torch.isnan(x).any():
+            print("NaN values encountered in sampled ReLU units. Falling back to direct computation of truncated normal PDF.")
+        p = truncated_normal(x, mu, sigma, a, b)
         return (x, p)
     
     
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
-        """Computes the non-linear activation function for the layer: x -> log(1 + exp(bias + x)).
+        """Computes the non-linear activation function for the layer: x -> log(1/ √(scale) * Phi((-x + bias)/ √(scale))).
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -166,12 +173,12 @@ class BernoulliLayer(Layer):
         Returns:
             torch.Tensor: Output tensor after applying nonlinearity.
         """
-        I = x + self.bias
-        return torch.where(I < 10, torch.log1p(torch.exp(I)), I)
+        alpha = (self.bias - x) / torch.sqrt(self.scale)
+        return torch.log(1.0 / torch.sqrt(self.scale) * phi(alpha))
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
-        """Computes the energy contribution of the layer for a given configuration.
+        """Computes the energy contribution of the layer for a given configuration: sum(0.5 * scale * x^2 + bias * x, axis=1).
 
         Args:
             x (torch.Tensor): Configuration tensor.
@@ -179,7 +186,8 @@ class BernoulliLayer(Layer):
         Returns:
             torch.Tensor: Energy contribution of the layer.
         """
-        return - x @ self.bias
+        u = 0.5 * self.scale.unsqueeze(0) * torch.pow(x, 2) + self.bias.unsqueeze(0) * x
+        return torch.sum(u, dim=1)
     
     
     def save_configurations(
@@ -232,8 +240,8 @@ class BernoulliLayer(Layer):
         visible = torch.tensor(visible, device=device, dtype=dtype)
         hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
         return {"visible": visible, "hidden": hidden, "label": label}
-
-
+    
+    
     def apply_gradient(
         self,
         x_pos: torch.Tensor,
@@ -241,11 +249,15 @@ class BernoulliLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
-        x_neg_mean = x_neg.mean(0)
-        grad_bias = x_pos_mean - x_neg_mean
+        grad_bias = - get_freq_single_point(relu(x_pos), weights=weights, pseudo_count=pseudo_count) + \
+            get_freq_single_point(relu(x_neg))
+        
+        grad_scale = - 0.5 * get_freq_single_point(torch.pow(relu(x_pos), 2), weights=weights, pseudo_count=pseudo_count) + \
+            0.5 * get_freq_single_point(torch.pow(relu(x_neg), 2))
+            
         self.bias.grad = grad_bias
+        self.scale.grad = grad_scale
         
 
     def __repr__(self) -> str:
-        return f"BernoulliLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"ReLULayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

@@ -6,12 +6,12 @@ from typing import Optional, Tuple, List, Dict
 class Layer(ABC, torch.nn.Module):
     def __init__(
         self,
-        shape: int | Tuple[int, ...],
+        shape: int | Tuple[int, ...] | torch.Size,
         **kwargs
     ):
         super(Layer, self).__init__()
-        assert isinstance(shape, int) or isinstance(shape, torch.Size) or (isinstance(shape, tuple) and len((shape,)) == 1), "Shape must be an integer or a tuple of one integer"
-        self.shape = torch.Size(shape) if isinstance(shape, tuple) else torch.Size((shape,))
+        assert isinstance(shape, int) or isinstance(shape, torch.Size) or isinstance(shape, tuple) or isinstance(shape, list), "Shape must be integer, tuple, list, or torch.Size."
+        self.shape = torch.Size(shape) if (isinstance(shape, tuple) or isinstance(shape, list)) else torch.Size((shape,))
         self.kwargs = kwargs
         
         
@@ -220,6 +220,7 @@ class Layer(ABC, torch.nn.Module):
         pass
     
     
+    @abstractmethod
     def apply_gradient(
         self,
         x_pos: torch.Tensor,

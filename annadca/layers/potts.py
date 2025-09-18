@@ -6,11 +6,6 @@ from torch.nn.functional import one_hot
 from torch.nn import Parameter
 from adabmDCA.fasta import write_fasta, get_tokens, import_from_fasta
 from adabmDCA.stats import get_freq_single_point, get_freq_two_points
-
-
-def zerosum_gauge(W: torch.Tensor) -> torch.Tensor:
-        """Applies the zero-sum gauge to the weight matrix of the model."""
-        return W - W.mean(1, keepdim=True)
         
 
 class PottsLayer(Layer):
@@ -20,6 +15,7 @@ class PottsLayer(Layer):
         **kwargs
     ):
         super().__init__(shape=shape, **kwargs)
+        assert len(self.shape) == 2, f"Potts layer shape must be two-dimensional (L, q), got {self.shape}."
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
 
 

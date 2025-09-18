@@ -236,13 +236,13 @@ if __name__ == '__main__':
     dataloader = cycle(dataloader)
     
     # compile the key functions of the model if torch version >= 2.0.0
-    if torch.__version__ >= "2.0.0":
-        print("Compiling the model...")
-        torch.set_float32_matmul_precision('high')  # Uses TF32
-        rbm.sample = torch.compile(rbm.sample)
-        rbm.apply_gradient = torch.compile(rbm.apply_gradient)
-        print("Model compiled successfully.")
-    print("\n")
+    # if torch.__version__ >= "2.0.0":
+    #     print("Compiling the model...")
+    #     torch.set_float32_matmul_precision('high')  # Uses TF32
+    #     rbm.sample = torch.compile(rbm.sample)
+    #     rbm.apply_gradient = torch.compile(rbm.apply_gradient)
+    #     print("Model compiled successfully.")
+    # print("\n")
     
     # Train the model
     start = time.time()
