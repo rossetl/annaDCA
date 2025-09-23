@@ -150,7 +150,7 @@ class PottsLayer(Layer):
         return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
-    def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
 
         Args:
@@ -158,12 +158,12 @@ class PottsLayer(Layer):
             beta (float): Inverse temperature parameter.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
+            torch.Tensor: Sampled output tensor.
         """
         p = torch.softmax(beta * (I + self.bias), dim=-1)
         indices = torch.multinomial(p.view(-1, p.size(-1)), num_samples=1).view(p.shape[:-1])
         x = one_hot(indices, num_classes=p.size(-1)).to(dtype=self.bias.dtype)
-        return (x, p)
+        return x
     
     
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
@@ -238,26 +238,40 @@ class PottsLayer(Layer):
         return {"visible": visible, "hidden": hidden, "label": label}
     
     
-    def apply_gradient(
+    def mean_hidden_activation(self, I: torch.Tensor) -> torch.Tensor:
+        """Computes the mean activation of the hidden units given the input tensor: <h | I>.
+
+        Args:
+            I (torch.Tensor): Input tensor.
+        Returns:
+            torch.Tensor: Mean activation of the hidden units.
+        """
+        p = torch.softmax(I + self.bias, dim=-1)
+        return p
+    
+    
+    def apply_gradient_visible(
         self,
         x_pos: torch.Tensor,
         x_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        """Computes and applies the gradient to the layer parameters.
-
-        Args:
-            x_pos (torch.Tensor): Positive (data) samples tensor.
-            x_neg (torch.Tensor): Negative (generated) samples tensor.
-            weights (Optional[torch.Tensor], optional): Weights for the positive samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-        """
         x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
         x_neg_mean = get_freq_single_point(x_neg)
         grad_bias = x_pos_mean - x_neg_mean
         self.bias.grad = grad_bias
-    
+        
+        
+    def apply_gradient_hidden(
+        self,
+        I_pos: torch.Tensor,
+        I_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0,
+    ):
+        raise NotImplementedError("Gradient w.r.t. hidden layer not implemented for Potts layer.")
+        
     
     def __repr__(self) -> str:
         return f"PottsLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

@@ -27,9 +27,6 @@ def pcd(
     Returns:
         Dict[str, torch.Tensor]: Updated chains.
     """
-    I_h = rbm.visible_layer.mm_left(rbm.weight_matrix, data_batch["visible"]) + data_batch["label"] @ rbm.label_matrix
-    data_batch["hidden"], _ = rbm.hidden_layer.forward(I_h, beta=1.0)
-
     # Compute the gradient of the Log-Likelihood
     rbm.apply_gradient(
         data=data_batch,

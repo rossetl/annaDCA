@@ -236,13 +236,13 @@ if __name__ == '__main__':
     dataloader = cycle(dataloader)
     
     # compile the key functions of the model if torch version >= 2.0.0
-    # if torch.__version__ >= "2.0.0":
-    #     print("Compiling the model...")
-    #     torch.set_float32_matmul_precision('high')  # Uses TF32
-    #     rbm.sample = torch.compile(rbm.sample)
-    #     rbm.apply_gradient = torch.compile(rbm.apply_gradient)
-    #     print("Model compiled successfully.")
-    # print("\n")
+    if torch.__version__ >= "2.0.0":
+        print("Compiling the model...")
+        torch.set_float32_matmul_precision('high')  # Uses TF32
+        rbm.sample = torch.compile(rbm.sample)
+        rbm.apply_gradient = torch.compile(rbm.apply_gradient)
+        print("Model compiled successfully.")
+    print("\n")
     
     # Train the model
     start = time.time()
@@ -269,18 +269,21 @@ if __name__ == '__main__':
                 lambda_l1=args.l1,
                 lambda_l2=args.l2,
             )
+            
+            # normalize the gradients
+            #torch.nn.utils.clip_grad_norm_(rbm.parameters(), max_norm=5.0)
 
             # Update the parameters
             optimizer.step()
 
-            if upd % 5000 == 0:
+            if upd % args.save_every == 0:
                 save_checkpoint(rbm, chains, optimizer, upd, save_dir=file_paths["checkpoint"])
                 with open(file_paths["log"], "a") as f:
                     f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
         pbar.close()
         
     # Save the final model if not already saved
-    if upd % 5000 != 0:
+    if upd % args.save_every != 0:
         save_checkpoint(rbm, chains, optimizer, upd, save_dir=file_paths["checkpoint"])
         with open(file_paths["log"], "a") as f:
             f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))

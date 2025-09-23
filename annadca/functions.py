@@ -144,11 +144,14 @@ def sample_truncated_normal(
         
     Returns:
         torch.Tensor: Samples from the truncated normal distribution.
-    """    
+    """
+    # eps value to avoid numerical issues
+    eps = 1e-7
+    std_abs = torch.abs(std)
     # Compute standardized bounds
-    alpha = (a - mean) / std
-    beta = (b - mean) / std
-    
+    alpha = (a - mean) / std_abs
+    beta = (b - mean) / std_abs
+
     # Compute CDF values
     sqrt_2 = math.sqrt(2.0)
     alpha_cdf = 0.5 * (1 + torch.erf(alpha / sqrt_2))
@@ -159,10 +162,10 @@ def sample_truncated_normal(
     p = alpha_cdf + (beta_cdf - alpha_cdf) * u
     
     # Apply inverse normal CDF
-    x = sqrt_2 * torch.erfinv(2 * p - 1)
+    x = sqrt_2 * torch.erfinv(torch.clamp(2.0 * p - 1, min=-1 + eps, max=1 - eps))
     
     # Transform to original scale
-    samples = mean + std * x
+    samples = mean + std_abs * x
     
     # Ensure bounds (extra safety)
     return torch.clamp(samples, min=a, max=b)

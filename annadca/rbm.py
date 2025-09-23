@@ -6,6 +6,7 @@ from torch.nn.functional import one_hot
 from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
+from annadca.layers.gaussian import GaussianLayer
 from annadca.layers.relu import ReLULayer
 from annadca.layers.bernoulli import get_freq_single_point
 
@@ -22,6 +23,7 @@ def get_rbm(
         "potts": PottsLayer,
         "bernoulli": BernoulliLayer,
         "relu": ReLULayer,
+        "gaussian": GaussianLayer,
     }
     assert visible_type in available_layers, f"Unknown visible layer type: {visible_type}. Available types are: {list(available_layers.keys())}"
     assert hidden_type in available_layers, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(available_layers.keys())}"
@@ -163,7 +165,7 @@ class AnnaRBM(torch.nn.Module):
         self,
         hidden: torch.Tensor,
         beta: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """Samples the visible units given the hidden units.
 
         Args:
@@ -171,7 +173,7 @@ class AnnaRBM(torch.nn.Module):
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled visible units and their probabilities.
+            torch.Tensor: Sampled visible units given the hidden units.
         """
         I_v = self.visible_layer.mm_right(self.weight_matrix, hidden)
         return self.visible_layer.forward(I_v, beta)
@@ -182,7 +184,7 @@ class AnnaRBM(torch.nn.Module):
         visible: torch.Tensor,
         label: torch.Tensor,
         beta: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """Samples the hidden units given the visible units.
 
         Args:
@@ -191,7 +193,7 @@ class AnnaRBM(torch.nn.Module):
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled hidden units and their probabilities.
+            torch.Tensor: Sampled hidden units given the visible units.
         """
         I_h = self.visible_layer.mm_left(self.weight_matrix, visible) + label @ self.label_matrix
         return self.hidden_layer.forward(I_h, beta)
@@ -201,7 +203,7 @@ class AnnaRBM(torch.nn.Module):
         self,
         hidden: torch.Tensor,
         beta: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         """Samples the label units given the hidden units.
 
         Args:
@@ -209,13 +211,13 @@ class AnnaRBM(torch.nn.Module):
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled label units and their probabilities.
+            torch.Tensor: Sampled label units given the hidden units.
         """
         I_l = hidden @ self.label_matrix.T
         p = torch.softmax(beta * (I_l + self.lbias), dim=-1)
         indices = torch.multinomial(p.view(-1, p.size(-1)), num_samples=1).view(p.shape[:-1])
         l = one_hot(indices, num_classes=p.size(-1)).to(dtype=self.weight_matrix.dtype)
-        return (l, p)
+        return l
     
     
     def gibbs_step(
@@ -223,8 +225,8 @@ class AnnaRBM(torch.nn.Module):
         visible: torch.Tensor,
         label: torch.Tensor,
         beta: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Computes a forward pass through the RBM, returning the configurations and the probabilities.
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Computes a forward pass through the RBM, returning the configurations.
 
         Args:
             visible (torch.Tensor): Visible units tensor of shape (batch_size, num_visibles, ...).
@@ -232,14 +234,13 @@ class AnnaRBM(torch.nn.Module):
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                Visible units, hidden units, label units, visible probabilities, hidden probabilities, label probabilities.
-            
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Visible units, hidden units, label units.
+
         """
-        h, h_p = self.sample_hiddens(visible, label, beta)
-        v, v_p = self.sample_visibles(h, beta)
-        l, l_p = self.sample_labels(h, beta)
-        return (v, h, l, v_p, h_p, l_p)
+        h = self.sample_hiddens(visible, label, beta)
+        v = self.sample_visibles(h, beta)
+        l = self.sample_labels(h, beta)
+        return (v, h, l)
     
     
     def forward(
@@ -247,7 +248,7 @@ class AnnaRBM(torch.nn.Module):
         visible: torch.Tensor,
         label: torch.Tensor,
         beta: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Alias for the gibbs_step method.
 
         Args:
@@ -256,8 +257,7 @@ class AnnaRBM(torch.nn.Module):
             beta (float, optional): Inverse temperature parameter for sampling. Defaults to 1.0.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                Visible units, hidden units, label units, visible probabilities, hidden probabilities, label probabilities.
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: Visible units, hidden units, label units.
         """
         return self.gibbs_step(visible, label, beta)
     
@@ -297,15 +297,12 @@ class AnnaRBM(torch.nn.Module):
         assert visible.shape[0] == label.shape[0], f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same."
 
         for _ in range(gibbs_steps):
-            visible, hidden, label, visible_prob, hidden_prob, label_prob = self.gibbs_step(visible, label, beta)
+            visible, hidden, label = self.gibbs_step(visible, label, beta)
             
         return {
             "visible": visible,
             "hidden": hidden,
             "label": label,
-            "visible_prob": visible_prob,
-            "hidden_prob": hidden_prob,
-            "label_prob": label_prob,
         }
         
     
@@ -333,18 +330,14 @@ class AnnaRBM(torch.nn.Module):
             visible = self.visible_layer.init_chains(num_samples=num_samples)
         assert visible.shape[0] == targets.shape[0], f"The number of visible units ({visible.shape[0]}) and target labels ({targets.shape[0]}) must be the same."
         hidden = self.hidden_layer.init_chains(num_samples=num_samples)
-        hidden_prob = torch.zeros_like(hidden)
-        visible_prob = torch.zeros_like(visible)
         
         for _ in range(gibbs_steps):
-            hidden, hidden_prob = self.sample_hiddens(visible, targets, beta)
-            visible, visible_prob = self.sample_visibles(hidden, beta)
-            
+            hidden = self.sample_hiddens(visible, targets, beta)
+            visible = self.sample_visibles(hidden, beta)
+
         return {
             "visible": visible,
             "hidden": hidden,
-            "visible_prob": visible_prob,
-            "hidden_prob": hidden_prob,
         }
         
         
@@ -456,13 +449,13 @@ class AnnaRBM(torch.nn.Module):
         energy_visibles = - self.visible_layer.nonlinearity(I_v).sum(dim=-1)
         energy_labels = - torch.logsumexp(self.lbias.unsqueeze(0) + I_l, dim=-1)
         return energy_hidden + energy_visibles + energy_labels
-    
-    
-    def average_activity_hidden(
+
+
+    def mean_hidden_activation(
         self,
         I: torch.Tensor,
     ) -> torch.Tensor:
-        """Computes the average activity of the hidden layer given the activation input tensor: <h | I>.
+        """Computes the mean activity of the hidden layer given the activation input tensor: <h | I>.
 
         Args:
             I (torch.Tensor): Activation input tensor.
@@ -470,7 +463,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Average activity of the hidden layer.
         """
-        return self.hidden_layer.average_activity(I)
+        return self.hidden_layer.mean_hidden_activation(I)
     
     
     def apply_gradient(
@@ -495,30 +488,41 @@ class AnnaRBM(torch.nn.Module):
         data["weight"] = data["weight"] / data["weight"].sum()
         nchains = len(chains["visible"])
         
-        self.visible_layer.apply_gradient(
+        self.visible_layer.apply_gradient_visible(
             x_pos=data["visible"],
             x_neg=chains["visible"],
             weights=data["weight"],
             pseudo_count=pseudo_count,
         )
-        self.hidden_layer.apply_gradient(
-            x_pos=data["hidden"], # these are actually the hidden activation inputs
-            x_neg=chains["hidden"],
+        
+        I_h_pos = self.visible_layer.mm_left(self.weight_matrix, data["visible"]) + data["label"] @ self.label_matrix
+        I_h_neg = self.visible_layer.mm_left(self.weight_matrix, chains["visible"]) + chains["label"] @ self.label_matrix
+
+        self.hidden_layer.apply_gradient_hidden(
+            I_pos=I_h_pos,
+            I_neg=I_h_neg,
             weights=data["weight"],
             pseudo_count=pseudo_count,
         )
         
+        m_h_pos = self.hidden_layer.mean_hidden_activation(I_h_pos)
+        m_h_neg = self.hidden_layer.mean_hidden_activation(I_h_neg)
+        
         l_pos_mean = get_freq_single_point(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
         l_neg_mean = chains["label"].mean(0)
         grad_lbias = l_pos_mean - l_neg_mean
-        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(data["visible"], data["weight"]), data["hidden"]) - \
-                             self.visible_layer.outer(chains["visible"], chains["hidden"]) / nchains
-        grad_label_matrix = (data["label"] * data["weight"].view(nchains, 1)).T @ data["hidden"] - \
-                            (chains["label"].T @ chains["hidden"]) / nchains
-        
+        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(data["visible"], data["weight"]), m_h_pos) - \
+                             self.visible_layer.outer(chains["visible"], m_h_neg) / nchains
+        grad_label_matrix = (data["label"] * data["weight"].view(nchains, 1)).T @ m_h_pos - \
+                            (chains["label"].T @ m_h_neg) / nchains
+
         # Regularization
         grad_weight_matrix -= lambda_l1 * self.weight_matrix.sign() + lambda_l2 * self.weight_matrix
         
         self.lbias.grad = grad_lbias
         self.weight_matrix.grad = grad_weight_matrix
         self.label_matrix.grad = grad_label_matrix
+        
+    
+    def __repr__(self) -> str:
+        return f"AnnaRBM(visible_layer={self.visible_layer}, hidden_layer={self.hidden_layer}, num_classes={self.num_classes}, shape={self.shape})"

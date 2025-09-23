@@ -142,7 +142,7 @@ class BernoulliLayer(Layer):
         return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
-    def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
 
         Args:
@@ -150,11 +150,11 @@ class BernoulliLayer(Layer):
             beta (float): Inverse temperature parameter.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
+            torch.Tensor: Sampled output tensor.
         """
         p = torch.sigmoid(beta * (I + self.bias))
         x = torch.bernoulli(p)
-        return (x, p)
+        return x
     
     
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
@@ -232,18 +232,41 @@ class BernoulliLayer(Layer):
         visible = torch.tensor(visible, device=device, dtype=dtype)
         hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
         return {"visible": visible, "hidden": hidden, "label": label}
+    
+    
+    def mean_hidden_activation(self, I: torch.Tensor) -> torch.Tensor:
+        """Computes the mean activation of the hidden units given the activation input tensor: <h | I>.
+
+        Args:
+            I (torch.Tensor): Activation input tensor.
+
+        Returns:
+            torch.Tensor: Mean activation of the hidden units.
+        """
+        return torch.sigmoid(I + self.bias)
 
 
-    def apply_gradient(
+    def apply_gradient_visible(
         self,
         x_pos: torch.Tensor,
         x_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
-        x_neg_mean = x_neg.mean(0)
-        grad_bias = x_pos_mean - x_neg_mean
+        grad_bias = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count) - x_neg.mean(0)
+        self.bias.grad = grad_bias
+        
+    
+    def apply_gradient_hidden(
+        self,
+        I_pos: torch.Tensor,
+        I_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ):
+        m_pos = torch.sigmoid(I_pos + self.bias)
+        m_neg = torch.sigmoid(I_neg + self.bias)
+        grad_bias = get_freq_single_point(m_pos, weights=weights, pseudo_count=pseudo_count) - m_neg.mean(0)
         self.bias.grad = grad_bias
         
 

@@ -4,17 +4,18 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.functions import get_freq_single_point, get_freq_two_points, phi, truncated_normal, sample_truncated_normal
+from annadca.functions import get_freq_single_point, get_freq_two_points
+import math
 
 
-class ReLULayer(Layer):
+class GaussianLayer(Layer):
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
         **kwargs
     ):
         super().__init__(shape=shape, **kwargs)
-        assert len(self.shape) == 1, f"ReLU layer shape must be one-dimensional, got {self.shape}."
+        assert len(self.shape) == 1, f"Gaussian layer shape must be one-dimensional, got {self.shape}."
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
         self.scale = Parameter(torch.ones(self.shape), requires_grad=False)
 
@@ -28,7 +29,7 @@ class ReLULayer(Layer):
         Args:
             frequencies (torch.Tensor): Empirical frequencies tensor.
         """
-        raise NotImplementedError("Initialization from frequencies not implemented for ReLU layer.")
+        raise NotImplementedError("Initialization from frequencies not implemented for Gaussian layer.")
 
 
     def init_chains(
@@ -142,7 +143,7 @@ class ReLULayer(Layer):
         return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
-    def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
 
         Args:
@@ -150,17 +151,15 @@ class ReLULayer(Layer):
             beta (float): Inverse temperature parameter.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
+            torch.Tensor: Sampled output tensor.
         """
-        mu = (I - self.bias) / self.scale
-        sigma = torch.abs(1.0 / (beta * self.scale))
-        a = torch.zeros_like(mu)
-        b = torch.full_like(mu, float('inf'))
-        x = sample_truncated_normal(mu, sigma, a, b)
-        p = truncated_normal(x, mu, sigma, a, b)
-        return (x, p)
-    
-    
+        abs_scale = torch.abs(self.scale)
+        mu = (I - self.bias) / abs_scale
+        sigma = 1.0 / (beta * abs_scale)
+        x = torch.normal(mu, sigma)
+        return x
+
+
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the non-linear activation function for the layer: x -> log(1/ √(scale) * Phi((-x + bias)/ √(scale))).
 
@@ -171,8 +170,7 @@ class ReLULayer(Layer):
             torch.Tensor: Output tensor after applying nonlinearity.
         """
         abs_scale = torch.abs(self.scale)
-        alpha = (self.bias - x) / torch.sqrt(abs_scale)
-        return torch.log(1.0 / torch.sqrt(abs_scale) * phi(alpha))
+        return torch.pow((x - self.bias), 2) / (2.0 * abs_scale + 1e-10) + 0.5 * torch.log(2.0 * math.pi / (abs_scale + 1e-10))
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
@@ -240,16 +238,14 @@ class ReLULayer(Layer):
         return {"visible": visible, "hidden": hidden, "label": label}
     
     
-    def mean_hidden_activation(self, x) -> torch.Tensor:
+    def mean_hidden_activation(self, I) -> torch.Tensor:
         abs_scale = torch.abs(self.scale)
-        return - ((x - self.bias) / (abs_scale + 1e-10) + \
-            1.0 / (torch.sqrt(abs_scale) * phi((self.bias - x) / torch.sqrt(abs_scale + 1e-10))))
+        return (I - self.bias) / abs_scale
 
 
-    def var_hidden_activation(self, x) -> torch.Tensor:
+    def var_hidden_activation(self, I) -> torch.Tensor:
         abs_scale = torch.abs(self.scale)
-        return -0.5 * (1.0 / (abs_scale + 1e-10) + torch.pow((x - self.bias) / (abs_scale + 1e-10), 2) + \
-            (x - self.bias) / (abs_scale * phi((self.bias - x) / torch.sqrt(abs_scale + 1e-10)) + 1e-10))
+        return 1.0 / abs_scale
 
 
     def apply_gradient_hidden(
@@ -260,8 +256,10 @@ class ReLULayer(Layer):
         pseudo_count: float = 0.0,
     ):
         grad_bias = self.get_freq_single_point(self.mean_hidden_activation(I_pos), weights, pseudo_count) - self.mean_hidden_activation(I_neg).mean(0)
-        grad_scale = self.get_freq_single_point(self.var_hidden_activation(I_pos), weights, pseudo_count) - self.var_hidden_activation(I_neg).mean(0)
-
+        grad_scale_pos_sample = - 0.5 * torch.pow((I_pos - self.bias) / self.scale, 2)
+        grad_scale_neg_sample = - 0.5 * torch.pow((I_neg - self.bias) / self.scale, 2)
+        grad_scale = self.get_freq_single_point(grad_scale_pos_sample, weights, pseudo_count) - grad_scale_neg_sample.mean(0)
+         # Update gradients
         self.bias.grad = grad_bias
         self.scale.grad = grad_scale
         
@@ -273,8 +271,8 @@ class ReLULayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        raise NotImplementedError("Gradient w.r.t. visible layer not implemented for ReLU layer.")
-        
+        raise NotImplementedError("Gradient w.r.t. visible layer not implemented for Gaussian layer.")
+
 
     def __repr__(self) -> str:
-        return f"ReLULayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"GaussianLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

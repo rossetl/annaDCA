@@ -142,7 +142,7 @@ class Layer(ABC, torch.nn.Module):
 
 
     @abstractmethod
-    def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
         If `p(x)` is the layer distribution and 'I' the activation input tensor, this method samples from 'p(x|I + bias)'.
 
@@ -151,7 +151,7 @@ class Layer(ABC, torch.nn.Module):
             beta (float): Inverse temperature parameter.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
+            torch.Tensor: Sampled output tensor.
         """
         pass
     
@@ -221,22 +221,51 @@ class Layer(ABC, torch.nn.Module):
     
     
     @abstractmethod
-    def apply_gradient(
+    def mean_hidden_activation(self, I) -> torch.Tensor:
+        """Computes the mean activation of the hidden units given the input tensor: <h | I>.
+
+        Args:
+            I (torch.Tensor): Input tensor.
+
+        Returns:
+            torch.Tensor: Mean activation of the hidden units.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def apply_gradient_visible(
         self,
         x_pos: torch.Tensor,
         x_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        """Computes the gradient of the layer parameters using to the positive (data) and negative (generated) samples.
+        """Computes the gradient of the visible layer parameters using to the positive (data) and negative (generated) samples.
 
         Args:
             x_pos (torch.Tensor): Positive samples tensor.
             x_neg (torch.Tensor): Negative samples tensor.
             weights (torch.Tensor, optional): Weights for the positive samples. If None, uniform weights are assumed.
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def apply_gradient_hidden(
+        self,
+        I_pos: torch.Tensor,
+        I_neg: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
+    ):
+        """Computes the gradient of the hidden layer parameters using to the positive (data) and negative (generated) samples.
 
-        Returns:
-            torch.Tensor: Computed gradient tensor.
+        Args:
+            I_pos (torch.Tensor): Positive activations.
+            I_neg (torch.Tensor): Negative activations.
+            weights (torch.Tensor, optional): Weights for the positive samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         """
         pass
