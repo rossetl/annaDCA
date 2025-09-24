@@ -49,9 +49,9 @@ class GaussianLayer(Layer):
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         if frequencies is None:
-            frequencies = torch.full(self.shape, 0.5, device=device, dtype=dtype)
+            frequencies = torch.full(self.shape, 0.0, device=device, dtype=dtype)
         assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        return torch.bernoulli(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype))
+        return torch.normal(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype), 1.0)
 
 
     def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -155,7 +155,7 @@ class GaussianLayer(Layer):
         """
         abs_scale = torch.abs(self.scale)
         mu = (I - self.bias) / abs_scale
-        sigma = 1.0 / (beta * abs_scale)
+        sigma = torch.sqrt(1.0 / (beta * abs_scale))
         x = torch.normal(mu, sigma)
         return x
 
@@ -256,8 +256,8 @@ class GaussianLayer(Layer):
         pseudo_count: float = 0.0,
     ):
         grad_bias = self.get_freq_single_point(self.mean_hidden_activation(I_pos), weights, pseudo_count) - self.mean_hidden_activation(I_neg).mean(0)
-        grad_scale_pos_sample = - 0.5 * torch.pow((I_pos - self.bias) / self.scale, 2)
-        grad_scale_neg_sample = - 0.5 * torch.pow((I_neg - self.bias) / self.scale, 2)
+        grad_scale_pos_sample = - 0.5 * torch.pow(self.mean_hidden_activation(I_pos), 2)
+        grad_scale_neg_sample = - 0.5 * torch.pow(self.mean_hidden_activation(I_neg), 2)
         grad_scale = self.get_freq_single_point(grad_scale_pos_sample, weights, pseudo_count) - grad_scale_neg_sample.mean(0)
          # Update gradients
         self.bias.grad = grad_bias

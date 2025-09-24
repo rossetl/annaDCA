@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.functions import get_freq_single_point, get_freq_two_points, phi, truncated_normal, sample_truncated_normal
+from annadca.functions import get_freq_single_point, get_freq_two_points, phi, logphi, sample_truncated_normal
 
 
 class ReLULayer(Layer):
@@ -45,12 +45,14 @@ class ReLULayer(Layer):
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
         """
-        device = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-        if frequencies is None:
-            frequencies = torch.full(self.shape, 0.5, device=device, dtype=dtype)
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        return torch.bernoulli(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype))
+        abs_scale = torch.abs(self.scale)
+        mu = - self.bias / (abs_scale + 1e-10)
+        mu = mu.unsqueeze(0).repeat(num_samples, 1)
+        sigma = torch.sqrt(1.0 / (abs_scale + 1e-10))
+        sigma = sigma.unsqueeze(0).repeat(num_samples, 1)
+        a = torch.zeros_like(mu)
+        b = torch.full_like(mu, float('inf'))
+        return sample_truncated_normal(mu, sigma, a, b)
 
 
     def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
@@ -142,7 +144,7 @@ class ReLULayer(Layer):
         return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
-    def forward(self, I: torch.Tensor, beta: float) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
 
         Args:
@@ -150,15 +152,15 @@ class ReLULayer(Layer):
             beta (float): Inverse temperature parameter.
             
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: Sampled output tensor and the probabilities.
+            torch.Tensor: Sampled output tensor.
         """
-        mu = (I - self.bias) / self.scale
-        sigma = torch.abs(1.0 / (beta * self.scale))
+        abs_scale = torch.abs(self.scale)
+        mu = (I - self.bias) / abs_scale
+        sigma = torch.sqrt(1.0 / (beta * abs_scale + 1e-10))
         a = torch.zeros_like(mu)
         b = torch.full_like(mu, float('inf'))
         x = sample_truncated_normal(mu, sigma, a, b)
-        p = truncated_normal(x, mu, sigma, a, b)
-        return (x, p)
+        return x
     
     
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
@@ -170,9 +172,9 @@ class ReLULayer(Layer):
         Returns:
             torch.Tensor: Output tensor after applying nonlinearity.
         """
-        abs_scale = torch.abs(self.scale)
-        alpha = (self.bias - x) / torch.sqrt(abs_scale)
-        return torch.log(1.0 / torch.sqrt(abs_scale) * phi(alpha))
+        mu = (x - self.bias) / torch.abs(self.scale + 1e-10)
+        sigma = torch.sqrt(1.0 / (torch.abs(self.scale) + 1e-10))
+        return torch.log(sigma) + logphi(- mu / sigma)
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
@@ -226,7 +228,6 @@ class ReLULayer(Layer):
         Returns:
             Dict[str, torch.Tensor]: Loaded configurations dictionary.
         """
-        
         if device is None:
             device = next(self.parameters()).device
         if dtype is None:
@@ -241,15 +242,23 @@ class ReLULayer(Layer):
     
     
     def mean_hidden_activation(self, x) -> torch.Tensor:
-        abs_scale = torch.abs(self.scale)
-        return - ((x - self.bias) / (abs_scale + 1e-10) + \
-            1.0 / (torch.sqrt(abs_scale) * phi((self.bias - x) / torch.sqrt(abs_scale + 1e-10))))
+        mu = (x - self.bias) / torch.abs(self.scale + 1e-10)
+        sigma = torch.sqrt(1.0 / (torch.abs(self.scale) + 1e-10))
+        return mu + sigma / phi(- mu / sigma)
 
 
     def var_hidden_activation(self, x) -> torch.Tensor:
         abs_scale = torch.abs(self.scale)
-        return -0.5 * (1.0 / (abs_scale + 1e-10) + torch.pow((x - self.bias) / (abs_scale + 1e-10), 2) + \
-            (x - self.bias) / (abs_scale * phi((self.bias - x) / torch.sqrt(abs_scale + 1e-10)) + 1e-10))
+        return 1.0 / (abs_scale + 1e-10)
+    
+    
+    def delta_grad_scale(
+        self,
+        I: torch.Tensor,
+    ) -> torch.Tensor:
+        mu = (I - self.bias) / torch.abs(self.scale + 1e-10)
+        sigma = torch.sqrt(1.0 / (torch.abs(self.scale) + 1e-10))
+        return - 0.5 * (torch.pow(sigma, 2) + torch.pow(mu, 2) + mu / phi(- mu / sigma))
 
 
     def apply_gradient_hidden(
@@ -259,9 +268,9 @@ class ReLULayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        grad_bias = self.get_freq_single_point(self.mean_hidden_activation(I_pos), weights, pseudo_count) - self.mean_hidden_activation(I_neg).mean(0)
-        grad_scale = self.get_freq_single_point(self.var_hidden_activation(I_pos), weights, pseudo_count) - self.var_hidden_activation(I_neg).mean(0)
-
+        grad_bias = - self.get_freq_single_point(self.mean_hidden_activation(I_pos), weights, pseudo_count) + self.mean_hidden_activation(I_neg).mean(0)
+        grad_scale = self.get_freq_single_point(self.delta_grad_scale(I_pos), weights, pseudo_count) - self.delta_grad_scale(I_neg).mean(0)
+         # Update gradients
         self.bias.grad = grad_bias
         self.scale.grad = grad_scale
         

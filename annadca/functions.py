@@ -68,14 +68,30 @@ def zerosum_gauge(W: torch.Tensor) -> torch.Tensor:
 
 def phi(x: torch.Tensor) -> torch.Tensor:
     """Applies the phi function to the input tensor: phi(x) = exp(x^2/2) * (1 - erf(x/sqrt(2))) * sqrt(2*pi)"""
+    sqrt2 = math.sqrt(2.0)
+    sqrtpi_2 = math.sqrt(math.pi / 2.0)
     
     def phi_asym(x: torch.Tensor) -> torch.Tensor:
         return torch.pow(x, -1) - torch.pow(x, -3) + 3.0 * torch.pow(x, -5)
     
     def phi_def(x: torch.Tensor) -> torch.Tensor:
-        return torch.exp(torch.pow(x, 2) / 2) * (1.0 - torch.erf(x / 1.4142)) * 1.2533
+        return torch.exp(torch.pow(x, 2) / 2.0) * (1.0 - torch.erf(x / sqrt2)) * sqrtpi_2
 
-    return torch.where(x < 5.0, phi_def(x), phi_asym(x))
+    return torch.where(x < 4.0, phi_def(x), phi_asym(x))
+
+
+def logphi(x: torch.Tensor) -> torch.Tensor:
+    """Applies the phi function to the input tensor: phi(x) = exp(x^2/2) * (1 - erf(x/sqrt(2))) * sqrt(2*pi)"""
+    sqrt2 = math.sqrt(2.0)
+    sqrtpi_2 = math.sqrt(math.pi / 2.0)
+    
+    def logphi_asym(x: torch.Tensor) -> torch.Tensor:
+        return torch.log(torch.pow(x, -1) - torch.pow(x, -3) + 3.0 * torch.pow(x, -5))
+
+    def logphi_def(x: torch.Tensor) -> torch.Tensor:
+        return (torch.pow(x, 2) / 2.0) + torch.log((1.0 - torch.erf(x / sqrt2)) * sqrtpi_2)
+
+    return torch.where(x < 4.0, logphi_def(x), logphi_asym(x))
 
 
 def truncated_normal(

@@ -271,7 +271,7 @@ if __name__ == '__main__':
             )
             
             # normalize the gradients
-            #torch.nn.utils.clip_grad_norm_(rbm.parameters(), max_norm=5.0)
+            # torch.nn.utils.clip_grad_norm_(rbm.parameters(), max_norm=5.0)
 
             # Update the parameters
             optimizer.step()

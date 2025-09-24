@@ -117,9 +117,6 @@ class AnnaRBM(torch.nn.Module):
         chains["visible"] = self.visible_layer.init_chains(num_samples=num_samples, frequencies=frequencies)
         chains["hidden"] = self.hidden_layer.init_chains(num_samples=num_samples)
         chains["label"] = torch.zeros((num_samples,) + self.num_classes, device=device, dtype=dtype)
-        chains["visible_mag"] = torch.zeros((num_samples,) + self.visible_layer.shape, device=device, dtype=dtype)
-        chains["hidden_mag"] = torch.zeros((num_samples,) + self.hidden_layer.shape, device=device, dtype=dtype)
-        chains["label_mag"] = torch.zeros((num_samples,) + self.num_classes, device=device, dtype=dtype)
         return chains
     
     
@@ -294,6 +291,7 @@ class AnnaRBM(torch.nn.Module):
             visible = chains_init["visible"]
         if label is None:
             label = chains_init["label"]
+        hidden = chains_init["hidden"]
         assert visible.shape[0] == label.shape[0], f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same."
 
         for _ in range(gibbs_steps):
