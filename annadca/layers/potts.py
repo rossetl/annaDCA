@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Dict
 from torch.nn.functional import one_hot
 from torch.nn import Parameter
 from adabmDCA.fasta import write_fasta, get_tokens, import_from_fasta
-from adabmDCA.stats import get_freq_single_point, get_freq_two_points
+from annadca.utils.stats import get_mean
         
 
 class PottsLayer(Layer):
@@ -110,44 +110,6 @@ class PottsLayer(Layer):
             torch.Tensor: Output tensor after layer-specific element-wise multiplication.
         """
         return x * y.view(y.shape[0], 1, 1)
-    
-    
-    def get_freq_single_point(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0,
-    ) -> torch.Tensor:
-        """Computes the single-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed single-point frequencies.
-        """
-        return get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
-    
-    
-    def get_freq_two_points(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0,
-    ) -> torch.Tensor:
-        """Computes the two-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed two-point frequencies.
-        """
-        return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -166,6 +128,12 @@ class PottsLayer(Layer):
         return x
     
     
+    def meanvar(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        mean = torch.softmax(x + self.bias, dim=-1)
+        var = mean * (1 - mean)
+        return mean, var
+
+
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the non-linear activation function for the layer: x -> logsumexp(x + bias).
 
@@ -238,18 +206,6 @@ class PottsLayer(Layer):
         return {"visible": visible, "hidden": hidden, "label": label}
     
     
-    def mean_hidden_activation(self, I: torch.Tensor) -> torch.Tensor:
-        """Computes the mean activation of the hidden units given the input tensor: <h | I>.
-
-        Args:
-            I (torch.Tensor): Input tensor.
-        Returns:
-            torch.Tensor: Mean activation of the hidden units.
-        """
-        p = torch.softmax(I + self.bias, dim=-1)
-        return p
-    
-    
     def apply_gradient_visible(
         self,
         x_pos: torch.Tensor,
@@ -257,9 +213,7 @@ class PottsLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        x_pos_mean = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count)
-        x_neg_mean = get_freq_single_point(x_neg)
-        grad_bias = x_pos_mean - x_neg_mean
+        grad_bias = get_mean(x_pos, weights=weights, pseudo_count=pseudo_count) - x_neg.mean(0)
         self.bias.grad = grad_bias
         
         

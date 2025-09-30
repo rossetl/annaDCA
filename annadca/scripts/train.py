@@ -8,22 +8,20 @@ import time
 import warnings
 import torch
 from torch.utils.data import DataLoader
-from torch.optim import SGD
+from torch.optim import Adam
 from adabmDCA.utils import get_device, get_dtype
 from annadca.parser import add_args_train
 from annadca.dataset import annaDataset
 from annadca.rbm import get_rbm, save_checkpoint
-from annadca.train import pcd
-from annadca.layers.bernoulli import get_freq_single_point
+from annadca.utils.stats import get_mean
 
-warnings.filterwarnings("ignore", message="Not enough SMs to use max_autotune_gemm mode")
+torch.set_float32_matmul_precision('high')
 
 # import command-line input arguments
 def create_parser():
     # Important arguments
     parser = argparse.ArgumentParser(description='Train an annaRBM model.')
     parser = add_args_train(parser) 
-    
     return parser
 
 
@@ -161,13 +159,13 @@ if __name__ == '__main__':
         )
         rbm.to(device=device, dtype=dtype)
         
-    frequences_visible = rbm.get_freq_single_point(
-        data=data,
+    frequences_visible = get_mean(
+        x=data,
         weights=dataset.weights,
         pseudo_count=args.pseudocount,
     )
-    frequences_labels = get_freq_single_point(
-        data=dataset.labels_one_hot,
+    frequences_labels = get_mean(
+        x=dataset.labels_one_hot,
         weights=dataset.weights,
         pseudo_count=args.pseudocount,
     )
@@ -177,7 +175,7 @@ if __name__ == '__main__':
         rbm.load_state_dict(checkpoint['model_state_dict'])
         chains = checkpoint["chains"]
         # Select the optimizer
-        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
+        optimizer = Adam(rbm.parameters(), lr=args.lr, maximize=True)
         if args.checkpoint is not None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         upd = checkpoint['update']
@@ -194,7 +192,7 @@ if __name__ == '__main__':
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
         chains = rbm.init_chains(num_samples=args.nchains, frequencies=frequences_visible)
         # Select the optimizer
-        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
+        optimizer = Adam(rbm.parameters(), lr=args.lr, maximize=True)
         for key, value in rbm.named_parameters():
             value.grad = torch.zeros_like(value)
         upd = 0
@@ -235,15 +233,12 @@ if __name__ == '__main__':
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
     dataloader = cycle(dataloader)
     
-    # compile the key functions of the model if torch version >= 2.0.0
     if torch.__version__ >= "2.0.0":
         print("Compiling the model...")
-        torch.set_float32_matmul_precision('high')  # Uses TF32
-        rbm.sample = torch.compile(rbm.sample)
-        rbm.apply_gradient = torch.compile(rbm.apply_gradient)
+        rbm = torch.compile(rbm)
         print("Model compiled successfully.")
     print("\n")
-    
+
     # Train the model
     start = time.time()
     pbar = tqdm(initial=upd, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
@@ -260,14 +255,14 @@ if __name__ == '__main__':
             # Get the next batch
             batch = next(dataloader)
             optimizer.zero_grad(set_to_none=False)
-            chains = pcd(
-                rbm=rbm,
+            chains = rbm.forward(
                 data_batch=batch,
                 chains=chains,
                 gibbs_steps=args.gibbs_steps,
                 pseudo_count=args.pseudocount,
-                lambda_l1=args.l1,
-                lambda_l2=args.l2,
+                l1_strength=args.l1,
+                l2_strength=args.l2,
+                l1l2_strength=args.l1l2
             )
             
             # normalize the gradients

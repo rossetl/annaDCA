@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.functions import get_freq_single_point, get_freq_two_points
+from annadca.utils.stats import get_mean
 
 
 class BernoulliLayer(Layer):
@@ -102,44 +102,6 @@ class BernoulliLayer(Layer):
             torch.Tensor: Output tensor after layer-specific element-wise multiplication.
         """
         return x * y.view(y.shape[0], 1)
-    
-    
-    def get_freq_single_point(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0,
-    ) -> torch.Tensor:
-        """Computes the single-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed single-point frequencies.
-        """
-        return get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
-    
-    
-    def get_freq_two_points(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0,
-    ) -> torch.Tensor:
-        """Computes the two-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed two-point frequencies.
-        """
-        return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -157,6 +119,20 @@ class BernoulliLayer(Layer):
         return x
     
     
+    def meanvar(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Computes the mean and variance of the layer's distribution given the input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Mean and variance tensors.
+        """
+        mean = torch.sigmoid(x + self.bias)
+        var = mean * (1 - mean)
+        return mean, var
+        
+    
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
         """Computes the non-linear activation function for the layer: x -> log(1 + exp(bias + x)).
 
@@ -166,8 +142,7 @@ class BernoulliLayer(Layer):
         Returns:
             torch.Tensor: Output tensor after applying nonlinearity.
         """
-        I = x + self.bias
-        return torch.where(I < 10, torch.log1p(torch.exp(I)), I)
+        return torch.where(x < 10, torch.log1p(torch.exp(x + self.bias)), x + self.bias)
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
@@ -232,18 +207,6 @@ class BernoulliLayer(Layer):
         visible = torch.tensor(visible, device=device, dtype=dtype)
         hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
         return {"visible": visible, "hidden": hidden, "label": label}
-    
-    
-    def mean_hidden_activation(self, I: torch.Tensor) -> torch.Tensor:
-        """Computes the mean activation of the hidden units given the activation input tensor: <h | I>.
-
-        Args:
-            I (torch.Tensor): Activation input tensor.
-
-        Returns:
-            torch.Tensor: Mean activation of the hidden units.
-        """
-        return torch.sigmoid(I + self.bias)
 
 
     def apply_gradient_visible(
@@ -253,7 +216,7 @@ class BernoulliLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        grad_bias = get_freq_single_point(x_pos, weights=weights, pseudo_count=pseudo_count) - x_neg.mean(0)
+        grad_bias = get_mean(x_pos, weights=weights, pseudo_count=pseudo_count) - x_neg.mean(0)
         self.bias.grad = grad_bias
         
     
@@ -264,9 +227,9 @@ class BernoulliLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        m_pos = torch.sigmoid(I_pos + self.bias)
-        m_neg = torch.sigmoid(I_neg + self.bias)
-        grad_bias = get_freq_single_point(m_pos, weights=weights, pseudo_count=pseudo_count) - m_neg.mean(0)
+        mean_pos, _ = self.meanvar(I_pos)
+        mean_neg, _ = self.meanvar(I_neg)
+        grad_bias = get_mean(mean_pos, weights=weights, pseudo_count=pseudo_count) - mean_neg.mean(0)
         self.bias.grad = grad_bias
         
 

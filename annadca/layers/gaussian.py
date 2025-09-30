@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.functions import get_freq_single_point, get_freq_two_points
+from annadca.utils.stats import get_mean
 import math
 
 
@@ -103,44 +103,6 @@ class GaussianLayer(Layer):
             torch.Tensor: Output tensor after layer-specific element-wise multiplication.
         """
         return x * y.view(y.shape[0], 1)
-    
-    
-    def get_freq_single_point(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0,
-    ) -> torch.Tensor:
-        """Computes the single-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed single-point frequencies.
-        """
-        return get_freq_single_point(data, weights=weights, pseudo_count=pseudo_count)
-    
-    
-    def get_freq_two_points(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0,
-    ) -> torch.Tensor:
-        """Computes the two-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed two-point frequencies.
-        """
-        return get_freq_two_points(data, weights=weights, pseudo_count=pseudo_count)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -154,8 +116,8 @@ class GaussianLayer(Layer):
             torch.Tensor: Sampled output tensor.
         """
         abs_scale = torch.abs(self.scale)
-        mu = (I - self.bias) / abs_scale
-        sigma = torch.sqrt(1.0 / (beta * abs_scale))
+        mu = (I + self.bias) / abs_scale
+        sigma = torch.sqrt(1.0 / (beta * abs_scale + 1e-10))
         x = torch.normal(mu, sigma)
         return x
 
@@ -170,7 +132,7 @@ class GaussianLayer(Layer):
             torch.Tensor: Output tensor after applying nonlinearity.
         """
         abs_scale = torch.abs(self.scale)
-        return torch.pow((x - self.bias), 2) / (2.0 * abs_scale + 1e-10) + 0.5 * torch.log(2.0 * math.pi / (abs_scale + 1e-10))
+        return torch.pow((x + self.bias), 2) / (2.0 * abs_scale + 1e-10) + 0.5 * torch.log(2.0 * math.pi / (abs_scale + 1e-10))
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
@@ -182,7 +144,7 @@ class GaussianLayer(Layer):
         Returns:
             torch.Tensor: Energy contribution of the layer.
         """
-        u = 0.5 * torch.abs(self.scale.unsqueeze(0)) * torch.pow(x, 2) + self.bias.unsqueeze(0) * x
+        u = 0.5 * torch.abs(self.scale.unsqueeze(0)) * torch.pow(x, 2) - self.bias.unsqueeze(0) * x
         return torch.sum(u, dim=1)
     
     
@@ -238,14 +200,11 @@ class GaussianLayer(Layer):
         return {"visible": visible, "hidden": hidden, "label": label}
     
     
-    def mean_hidden_activation(self, I) -> torch.Tensor:
-        abs_scale = torch.abs(self.scale)
-        return (I - self.bias) / abs_scale
-
-
-    def var_hidden_activation(self, I) -> torch.Tensor:
-        abs_scale = torch.abs(self.scale)
-        return 1.0 / abs_scale
+    def meanvar(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        abs_scale = torch.abs(self.scale) + 1e-10
+        mean = (x + self.bias) / abs_scale
+        var = 1.0 / abs_scale
+        return mean, var
 
 
     def apply_gradient_hidden(
@@ -255,11 +214,15 @@ class GaussianLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        grad_bias = self.get_freq_single_point(self.mean_hidden_activation(I_pos), weights, pseudo_count) - self.mean_hidden_activation(I_neg).mean(0)
-        grad_scale_pos_sample = - 0.5 * torch.pow(self.mean_hidden_activation(I_pos), 2)
-        grad_scale_neg_sample = - 0.5 * torch.pow(self.mean_hidden_activation(I_neg), 2)
-        grad_scale = self.get_freq_single_point(grad_scale_pos_sample, weights, pseudo_count) - grad_scale_neg_sample.mean(0)
-         # Update gradients
+        mean_pos, var_pos = self.meanvar(I_pos)
+        mean_neg, var_neg = self.meanvar(I_neg)
+        # ∂Γ/∂θ = <h> = μ
+        grad_bias = get_mean(mean_pos, weights, pseudo_count) - mean_neg.mean(0)
+        # ∂Γ/∂γ = -0.5 * <h²> = -0.5 * (μ² + σ²)
+        grad_scale_pos = - 0.5 * get_mean(torch.pow(mean_pos, 2) + var_pos, weights, pseudo_count)
+        grad_scale_neg = - 0.5 * (torch.pow(mean_neg, 2) + var_neg).mean(0)
+        grad_scale = grad_scale_pos - grad_scale_neg
+        # Update gradients
         self.bias.grad = grad_bias
         self.scale.grad = grad_scale
         

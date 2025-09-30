@@ -99,46 +99,6 @@ class Layer(ABC, torch.nn.Module):
             torch.Tensor: Output tensor after layer-specific element-wise multiplication.
         """
         pass
-    
-    
-    @abstractmethod
-    def get_freq_single_point(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0,
-    ) -> torch.Tensor:
-        """Computes the single-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed single-point frequencies.
-        """
-        pass
-    
-    
-    @abstractmethod
-    def get_freq_two_points(
-        self,
-        data: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0,
-    ) -> torch.Tensor:
-        """Computes the two-point frequencies of the input tensor.
-
-        Args:
-            data (torch.Tensor): Input tensor.
-            weights (torch.Tensor, optional): Weights for the samples. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Computed two-point frequencies.
-        """
-        pass
 
 
     @abstractmethod
@@ -152,6 +112,19 @@ class Layer(ABC, torch.nn.Module):
 
         Returns:
             torch.Tensor: Sampled output tensor.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def meanvar(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Computes the mean and variance of the input tensor with respect to the layer's distribution.
+
+        Args:
+            x (torch.Tensor): Input tensor.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Mean and variance of the input tensor.
         """
         pass
     
@@ -216,19 +189,6 @@ class Layer(ABC, torch.nn.Module):
 
         Returns:
             Dict[str, torch.Tensor]: Loaded configurations dictionary.
-        """
-        pass
-    
-    
-    @abstractmethod
-    def mean_hidden_activation(self, I) -> torch.Tensor:
-        """Computes the mean activation of the hidden units given the input tensor: <h | I>.
-
-        Args:
-            I (torch.Tensor): Input tensor.
-
-        Returns:
-            torch.Tensor: Mean activation of the hidden units.
         """
         pass
     
