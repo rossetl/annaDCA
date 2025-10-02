@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.utils.stats import get_mean
+from annadca.utils.stats import get_mean, get_meanvar
 
 
 class BernoulliLayer(Layer):
@@ -222,16 +222,45 @@ class BernoulliLayer(Layer):
     
     def apply_gradient_hidden(
         self,
-        I_pos: torch.Tensor,
-        I_neg: torch.Tensor,
+        mean_h_pos: torch.Tensor,
+        mean_h_neg: torch.Tensor,
+        var_h_pos: torch.Tensor,
+        var_h_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        mean_pos, _ = self.meanvar(I_pos)
-        mean_neg, _ = self.meanvar(I_neg)
-        grad_bias = get_mean(mean_pos, weights=weights, pseudo_count=pseudo_count) - mean_neg.mean(0)
+        grad_bias = get_mean(mean_h_pos, weights=weights, pseudo_count=pseudo_count) - mean_h_neg.mean(0)
         self.bias.grad = grad_bias
-        
+
+
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        c: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+            c (torch.Tensor): Centering tensor.
+        """
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad - dW @ c
+            self.bias.grad = grad_bias
+            
+    
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        dL: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
+        **kwargs,
+    ):
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - c_v @ dW - c_l @ dL
+            self.bias.grad = grad_bias
 
     def __repr__(self) -> str:
         return f"BernoulliLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

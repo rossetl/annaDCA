@@ -8,7 +8,7 @@ from annadca.layers.potts import PottsLayer
 from annadca.layers.gaussian import GaussianLayer
 from annadca.layers.label import LabelLayer, LabelNullLayer
 from annadca.layers.relu import ReLULayer
-
+from annadca.utils.stats import get_mean
 
 def get_rbm(
     visible_type: str,
@@ -390,19 +390,58 @@ class AnnaRBM(torch.nn.Module):
 
     def mean_hidden_activation(
         self,
-        I: torch.Tensor,
+        visible: torch.Tensor,
+        label: torch.Tensor,
     ) -> torch.Tensor:
         """Computes the mean activity of the hidden layer given the activation input tensor: <h | I>.
 
         Args:
-            I (torch.Tensor): Activation input tensor.
+            visible (torch.Tensor): Visible input tensor.
+            label (torch.Tensor): Label input tensor.
 
         Returns:
             torch.Tensor: Average activity of the hidden layer.
         """
+        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
         return self.hidden_layer.meanvar(I)[0]
     
     
+    def var_hidden_activation(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+    ) -> torch.Tensor:
+        """Computes the variance of the hidden layer activity given the activation input tensor: <(h - <h | I>)^2 | I>.
+
+        Args:
+            visible (torch.Tensor): Visible input tensor.
+            label (torch.Tensor): Label input tensor.
+
+        Returns:
+            torch.Tensor: Variance of the hidden layer activity.
+        """
+        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        return self.hidden_layer.meanvar(I)[1]
+    
+    
+    def meanvar_hidden_activation(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Computes the mean and variance of the hidden layer activity given the activation input tensor: <h | I>, <(h - <h | I>)^2 | I>.
+
+        Args:
+            visible (torch.Tensor): Visible input tensor.
+            label (torch.Tensor): Label input tensor.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: Mean and variance of the hidden layer activity.
+        """
+        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        return self.hidden_layer.meanvar(I)
+
+
     def regularize(
         self,
         l1_strength: float = 0.0,
@@ -421,7 +460,7 @@ class AnnaRBM(torch.nn.Module):
                     self.weight_matrix.grad -= l1l2_strength * self.weight_matrix.abs().mean(dim=(1, 2), keepdim=True) * self.weight_matrix.sign()
                 else:
                     self.weight_matrix.grad -= l1l2_strength * self.weight_matrix.abs().mean(1, keepdim=True) * self.weight_matrix.sign()
-
+        
 
     def apply_gradient(
         self,
@@ -430,7 +469,8 @@ class AnnaRBM(torch.nn.Module):
         pseudo_count: float = 0.0,
         l1_strength: float = 0.0,
         l2_strength: float = 0.0,
-        l1l2_strength: float = 0.0
+        l1l2_strength: float = 0.0,
+        standardize: bool = False,
     ) -> None:
         """Applies the computed gradient to the model parameters.
 
@@ -441,42 +481,69 @@ class AnnaRBM(torch.nn.Module):
             l1_strength (float, optional): L1 regularization weight. Defaults to 0.0.
             l2_strength (float, optional): L2 regularization weight. Defaults to 0.0.
             l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
+            standardize (bool, optional): Whether to apply gradient standardization. Defaults to False.
         """
         # Normalize the weights
         data["weight"] = data["weight"] / data["weight"].sum()
         nchains = len(chains["visible"])
+        # Hidden distribution means and variances
+        h_pos, var_h_pos = self.meanvar_hidden_activation(data["visible"], data["label"])
+        h_neg, var_h_neg = self.meanvar_hidden_activation(chains["visible"], chains["label"])
         
+        if standardize:
+            v_pos = self.visible_layer.fit_transform(data["visible"], weights=data["weight"], pseudo_count=pseudo_count)
+            l_pos = self.label_layer.fit_transform(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
+            v_neg = self.visible_layer.transform(chains["visible"])
+            l_neg = self.label_layer.transform(chains["label"])
+            h_pos = self.hidden_layer.fit_transform(h_pos, weights=data["weight"], pseudo_count=pseudo_count)
+            h_neg = self.hidden_layer.transform(h_neg)
+            var_h_pos /= torch.pow(self.hidden_layer.scale_stnd, 2)
+            var_h_neg /= torch.pow(self.hidden_layer.scale_stnd, 2)
+        
+        else:
+            v_pos, l_pos = data["visible"], data["label"]
+            v_neg, l_neg = chains["visible"], chains["label"]
+
         self.visible_layer.apply_gradient_visible(
-            x_pos=data["visible"],
-            x_neg=chains["visible"],
+            x_pos=v_pos,
+            x_neg=v_neg,
             weights=data["weight"],
             pseudo_count=pseudo_count,
         )
         
         self.label_layer.apply_gradient_visible(
-            x_pos=data["label"],
-            x_neg=chains["label"],
+            x_pos=l_pos,
+            x_neg=l_neg,
             weights=data["weight"],
             pseudo_count=pseudo_count,
         )
-
-        I_h_pos = self.visible_layer.mm_left(self.weight_matrix, data["visible"]) + self.label_layer.mm_left(self.label_matrix, data["label"])
-        I_h_neg = self.visible_layer.mm_left(self.weight_matrix, chains["visible"]) + self.label_layer.mm_left(self.label_matrix, chains["label"])
 
         self.hidden_layer.apply_gradient_hidden(
-            I_pos=I_h_pos,
-            I_neg=I_h_neg,
+            mean_h_pos=h_pos,
+            mean_h_neg=h_neg,
+            var_h_pos=torch.ones_like(h_pos),
+            var_h_neg=torch.ones_like(h_neg),
             weights=data["weight"],
             pseudo_count=pseudo_count,
         )
-        
-        m_h_pos = self.mean_hidden_activation(I_h_pos)
-        m_h_neg = self.mean_hidden_activation(I_h_neg)
 
-        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(data["visible"], data["weight"]), m_h_pos) - \
-                             self.visible_layer.outer(chains["visible"], m_h_neg) / nchains
-        grad_label_matrix = self.label_layer.outer(self.label_layer.multiply(data["label"], data["weight"]), m_h_pos) - \
-                            self.label_layer.outer(chains["label"], m_h_neg) / nchains
+        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(v_pos, data["weight"]), h_pos) - \
+                             self.visible_layer.outer(v_neg, h_neg) / nchains
+        grad_label_matrix = self.label_layer.outer(self.label_layer.multiply(l_pos, data["weight"]), h_pos) - \
+                            self.label_layer.outer(l_neg, h_neg) / nchains
+
+        if standardize:
+            grad_weight_matrix /= self.hidden_layer.scale_stnd
+            grad_label_matrix /= self.hidden_layer.scale_stnd
+
+            self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c=self.hidden_layer.bias_stnd)
+            self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c=self.hidden_layer.bias_stnd)
+            self.hidden_layer.standardize_gradient_hidden(
+                dW=grad_weight_matrix,
+                dL=grad_label_matrix,
+                c_v=self.visible_layer.bias_stnd,
+                c_l=self.label_layer.bias_stnd,
+            )
 
         self.weight_matrix.grad = grad_weight_matrix
         self.label_matrix.grad = grad_label_matrix
@@ -492,7 +559,8 @@ class AnnaRBM(torch.nn.Module):
         pseudo_count: float = 0.0,
         l1_strength: float = 0.0,
         l2_strength: float = 0.0,
-        l1l2_strength: float = 0.0
+        l1l2_strength: float = 0.0,
+        standardize: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Computes the gradient of the parameters of the model and the Markov chains using the Persistent Contrastive Divergence algorithm.
     
@@ -504,7 +572,8 @@ class AnnaRBM(torch.nn.Module):
             l1_strength (float, optional): L1 regularization weight. Defaults to 0.0.
             l2_strength (float, optional): L2 regularization weight. Defaults to 0.0.
             l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
-    
+            standardize (bool, optional): Whether to standardize the gradients. Defaults to False.
+
         Returns:
             Dict[str, torch.Tensor]: Updated chains.
         """
@@ -516,6 +585,7 @@ class AnnaRBM(torch.nn.Module):
             l1_strength=l1_strength,
             l2_strength=l2_strength,
             l1l2_strength=l1l2_strength,
+            standardize=standardize,
         )
         
         # Update the persistent chains

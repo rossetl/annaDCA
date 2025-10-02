@@ -1,6 +1,7 @@
 import torch
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, List, Dict
+from annadca.utils.stats import get_meanvar
 
 
 class Layer(ABC, torch.nn.Module):
@@ -12,7 +13,11 @@ class Layer(ABC, torch.nn.Module):
         super(Layer, self).__init__()
         assert isinstance(shape, int) or isinstance(shape, torch.Size) or isinstance(shape, tuple) or isinstance(shape, list), "Shape must be integer, tuple, list, or torch.Size."
         self.shape = torch.Size(shape) if (isinstance(shape, tuple) or isinstance(shape, list)) else torch.Size((shape,))
+        # Batch-specific variables for centering and scaling the inputs
+        self.bias_stnd = torch.zeros(self.shape, requires_grad=False)
+        self.scale_stnd = torch.ones(self.shape, requires_grad=False)
         self.kwargs = kwargs
+
         
         
     @abstractmethod
@@ -215,17 +220,86 @@ class Layer(ABC, torch.nn.Module):
     @abstractmethod
     def apply_gradient_hidden(
         self,
-        I_pos: torch.Tensor,
-        I_neg: torch.Tensor,
+        mean_h_pos: torch.Tensor,
+        mean_h_neg: torch.Tensor,
+        var_h_pos: torch.Tensor,
+        var_h_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
         """Computes the gradient of the hidden layer parameters using to the positive (data) and negative (generated) samples.
 
         Args:
-            I_pos (torch.Tensor): Positive activations.
-            I_neg (torch.Tensor): Negative activations.
+            mean_h_pos (torch.Tensor): Mean activity of the positive samples.
+            mean_h_neg (torch.Tensor): Mean activity of the negative samples.
+            var_h_pos (torch.Tensor): Variance of the positive samples.
+            var_h_neg (torch.Tensor): Variance of the negative samples.
             weights (torch.Tensor, optional): Weights for the positive samples. If None, uniform weights are assumed.
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+        """
+        pass
+    
+    
+    def fit(
+        self,
+        x: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
+    ):
+        mean, var = get_meanvar(x, weights=weights, pseudo_count=pseudo_count)
+        self.bias_stnd, self.scale_stnd = mean, torch.ones_like(torch.sqrt(var + 1e-8))
+
+
+    def transform(
+        self,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        return (x - self.bias_stnd) / self.scale_stnd
+    
+    
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
+    ) -> torch.Tensor:
+        """Fits the layer to the input data and transforms it.
+
+        Args:
+            x (torch.Tensor): Input tensor to fit and transform.
+            weights (Optional[torch.Tensor], optional): Weights for the input tensor. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
+        Returns:
+            torch.Tensor: Transformed tensor.
+        """
+        self.fit(x, weights=weights, pseudo_count=pseudo_count)
+        return self.transform(x)
+
+
+    @abstractmethod
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
         """
         pass

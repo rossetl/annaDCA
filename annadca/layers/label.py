@@ -220,16 +220,47 @@ class LabelLayer(Layer):
     
     def apply_gradient_hidden(
         self,
-        I_pos: torch.Tensor,
-        I_neg: torch.Tensor,
+        mean_h_pos: torch.Tensor,
+        mean_h_neg: torch.Tensor,
+        var_h_pos: torch.Tensor,
+        var_h_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
         raise NotImplementedError("Gradient for hidden layer not implemented.")
-        
+    
+    
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        c: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+            c (torch.Tensor): Centering tensor.
+        """
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad - dW @ c
+            self.bias.grad = grad_bias
+            
+    
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        dL: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
+        **kwargs,
+    ):
+        raise NotImplementedError("Standardize gradient for hidden layer not implemented.")
+
 
     def __repr__(self) -> str:
         return f"LabelLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+    
     
     
 class LabelNullLayer(Layer):
@@ -451,6 +482,8 @@ class LabelNullLayer(Layer):
         pseudo_count: float = 0.0,
     ):
         raise NotImplementedError("Gradient for hidden layer not implemented.")
+    
+    
         
 
     def __repr__(self) -> str:

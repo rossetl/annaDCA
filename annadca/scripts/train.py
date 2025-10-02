@@ -8,7 +8,7 @@ import time
 import warnings
 import torch
 from torch.utils.data import DataLoader
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from adabmDCA.utils import get_device, get_dtype
 from annadca.parser import add_args_train
 from annadca.dataset import annaDataset
@@ -44,7 +44,7 @@ if __name__ == '__main__':
     print(template.format("Number of chains:", args.nchains))
     print(template.format("Number of Gibbs steps:", args.gibbs_steps))
     print(template.format("Number of epochs:", args.nepochs))
-    print(template.format("Centered gradient:", not args.uncentered))
+    print(template.format("Standardized gradient:", str(not args.no_standardize)))
     print(template.format("L1 regularization:", args.l1))
     print(template.format("L2 regularization:", args.l2))
     print(template.format("Profile initialization:", args.init_from_profile))
@@ -175,7 +175,7 @@ if __name__ == '__main__':
         rbm.load_state_dict(checkpoint['model_state_dict'])
         chains = checkpoint["chains"]
         # Select the optimizer
-        optimizer = Adam(rbm.parameters(), lr=args.lr, maximize=True)
+        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
         if args.checkpoint is not None:
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         upd = checkpoint['update']
@@ -192,7 +192,7 @@ if __name__ == '__main__':
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
         chains = rbm.init_chains(num_samples=args.nchains, frequencies=frequences_visible)
         # Select the optimizer
-        optimizer = Adam(rbm.parameters(), lr=args.lr, maximize=True)
+        optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
         for key, value in rbm.named_parameters():
             value.grad = torch.zeros_like(value)
         upd = 0
@@ -213,7 +213,7 @@ if __name__ == '__main__':
         f.write(template.format("gibbs steps:", args.gibbs_steps))
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
-        f.write(template.format("centered:", not args.uncentered))
+        f.write(template.format("standardized:", str(not args.no_standardize)))
         f.write(template.format("profile init:", args.init_from_profile))
         f.write(template.format("l1 strength:", args.l1))
         f.write(template.format("l2 strength:", args.l2))
@@ -262,7 +262,8 @@ if __name__ == '__main__':
                 pseudo_count=args.pseudocount,
                 l1_strength=args.l1,
                 l2_strength=args.l2,
-                l1l2_strength=args.l1l2
+                l1l2_strength=args.l1l2,
+                standardize=not args.no_standardize,
             )
             
             # normalize the gradients
