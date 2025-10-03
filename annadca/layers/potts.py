@@ -91,14 +91,19 @@ class PottsLayer(Layer):
         """Layer-specific outer product operation between input tensors x and y.
 
         Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l, q).
-            y (torch.Tensor): Second input tensor of shape (batch_size, h).
+            x (torch.Tensor): First input tensor of shape (l, q) or (batch_size, l, q).
+            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
         Returns:
             torch.Tensor: Output tensor after layer-specific outer product.
         """
-        return torch.einsum('nlq,nh->lqh', x, y)
-    
-    
+        if len(x.shape) == 2 and len(y.shape) == 1:
+            return torch.einsum("lq,h->lqh", x, y)
+        elif len(x.shape) == 3 and len(y.shape) == 2:
+            return torch.einsum('nlq,nh->lqh', x, y)
+        else:
+            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
+
+
     def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Layer-specific element-wise multiplication operation between input tensors x and y.
 

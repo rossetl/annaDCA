@@ -19,7 +19,6 @@ class Layer(ABC, torch.nn.Module):
         self.kwargs = kwargs
 
         
-        
     @abstractmethod
     def init_chains(
         self,
@@ -281,12 +280,14 @@ class Layer(ABC, torch.nn.Module):
     def standardize_gradient_visible(
         self,
         dW: torch.Tensor,
+        c_h: torch.Tensor,
         **kwargs,
     ):
         """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
 
         Args:
             dW (torch.Tensor): Gradient of the weight matrix.
+            c_h (torch.Tensor): Centering tensor for the hidden layer.
         """
         pass
     
@@ -295,11 +296,15 @@ class Layer(ABC, torch.nn.Module):
     def standardize_gradient_hidden(
         self,
         dW: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
         **kwargs,
     ):
         """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
 
         Args:
             dW (torch.Tensor): Gradient of the weight matrix.
+            c_v (torch.Tensor): Centering tensor for the visible layer.
+            c_l (torch.Tensor): Centering tensor for the label layer.
         """
         pass

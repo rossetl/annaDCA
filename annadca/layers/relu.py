@@ -86,12 +86,17 @@ class ReLULayer(Layer):
         """Layer-specific outer product operation between input tensors x and y.
 
         Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, h).
+            x (torch.Tensor): First input tensor of shape (l,) or (batch_size, l).
+            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
         Returns:
             torch.Tensor: Output tensor after layer-specific outer product.
         """
-        return torch.einsum("nl,nh->lh", x, y)
+        if len(x.shape) == 1 and len(y.shape) == 1:
+            return torch.outer(x, y)
+        elif len(x.shape) == 2 and len(y.shape) == 2:
+            return torch.einsum("nl,nh->lh", x, y)
+        else:
+            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
 
 
     def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -219,24 +224,23 @@ class ReLULayer(Layer):
 
     def apply_gradient_hidden(
         self,
-        I_pos: torch.Tensor,
-        I_neg: torch.Tensor,
+        mean_h_pos: torch.Tensor,
+        mean_h_neg: torch.Tensor,
+        var_h_pos: torch.Tensor,
+        var_h_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
-    ):
-        mean_pos, var_pos = self.meanvar(I_pos)
-        mean_neg, var_neg = self.meanvar(I_neg)
-        
+    ):        
         # ∂Γ/∂θ = <h> = μ_t
-        grad_bias = get_mean(mean_pos, weights, pseudo_count) - mean_neg.mean(0)
+        grad_bias = get_mean(mean_h_pos, weights, pseudo_count) - mean_h_neg.mean(0)
 
         # ∂Γ/∂γ = -0.5 * <h²> = -0.5 * (μ² + σ²)
-        grad_scale_pos = - 0.5 * get_mean(torch.pow(mean_pos, 2) + var_pos, weights, pseudo_count)
-        grad_scale_neg = - 0.5 * (torch.pow(mean_neg, 2) + var_neg).mean(0)
+        grad_scale_pos = - 0.5 * get_mean(torch.pow(mean_h_pos, 2) + var_h_pos, weights, pseudo_count)
+        grad_scale_neg = - 0.5 * (torch.pow(mean_h_neg, 2) + var_h_neg).mean(0)
         grad_scale = grad_scale_pos - grad_scale_neg
         # Update gradients
         self.bias.grad = grad_bias
-        self.scale.grad = grad_scale
+        self.scale.grad = torch.zeros_like(grad_scale)
 
 
     def apply_gradient_visible(
@@ -247,6 +251,34 @@ class ReLULayer(Layer):
         pseudo_count: float = 0.0,
     ):
         raise NotImplementedError("Gradient w.r.t. visible layer not implemented for ReLU layer.")
+    
+    
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        c_h: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+            c_h (torch.Tensor): Centering tensor for the hidden layer.
+        """
+        raise NotImplementedError("Standardization of gradient w.r.t. visible layer not implemented for ReLU layer.")
+            
+    
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        dL: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
+        **kwargs,
+    ):
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - c_v @ dW - c_l @ dL + (self.bias_stnd * self.scale) / torch.pow(self.scale_stnd, 2)
+            self.bias.grad = grad_bias
         
 
     def __repr__(self) -> str:

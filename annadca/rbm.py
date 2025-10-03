@@ -533,11 +533,11 @@ class AnnaRBM(torch.nn.Module):
                             self.label_layer.outer(l_neg, h_neg) / nchains
 
         if standardize:
-            grad_weight_matrix /= self.hidden_layer.scale_stnd
-            grad_label_matrix /= self.hidden_layer.scale_stnd
+            grad_weight_matrix /= self.visible_layer.outer(self.visible_layer.scale_stnd, self.hidden_layer.scale_stnd)
+            grad_label_matrix /= self.label_layer.outer(self.label_layer.scale_stnd, self.hidden_layer.scale_stnd)
 
-            self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c=self.hidden_layer.bias_stnd)
-            self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c=self.hidden_layer.bias_stnd)
+            self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c_h=self.hidden_layer.bias_stnd)
+            self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c_h=self.hidden_layer.bias_stnd)
             self.hidden_layer.standardize_gradient_hidden(
                 dW=grad_weight_matrix,
                 dL=grad_label_matrix,

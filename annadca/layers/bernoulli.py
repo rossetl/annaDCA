@@ -83,12 +83,17 @@ class BernoulliLayer(Layer):
         """Layer-specific outer product operation between input tensors x and y.
 
         Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, h).
+            x (torch.Tensor): First input tensor of shape (l,) or (batch_size, l).
+            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
         Returns:
             torch.Tensor: Output tensor after layer-specific outer product.
         """
-        return torch.einsum("nl,nh->lh", x, y)
+        if len(x.shape) == 1 and len(y.shape) == 1:
+            return torch.outer(x, y)
+        elif len(x.shape) == 2 and len(y.shape) == 2:
+            return torch.einsum("nl,nh->lh", x, y)
+        else:
+            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
 
 
     def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
@@ -236,17 +241,17 @@ class BernoulliLayer(Layer):
     def standardize_gradient_visible(
         self,
         dW: torch.Tensor,
-        c: torch.Tensor,
+        c_h: torch.Tensor,
         **kwargs,
     ):
         """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
 
         Args:
             dW (torch.Tensor): Gradient of the weight matrix.
-            c (torch.Tensor): Centering tensor.
+            c_h (torch.Tensor): Centering tensor for the hidden layer.
         """
         if self.bias.grad is not None:
-            grad_bias = self.bias.grad - dW @ c
+            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
             self.bias.grad = grad_bias
             
     
