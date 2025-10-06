@@ -279,7 +279,8 @@ class ReLULayer(Layer):
         if self.bias.grad is not None:
             grad_bias = self.bias.grad / self.scale_stnd - c_v @ dW - c_l @ dL + (self.bias_stnd * self.scale) / torch.pow(self.scale_stnd, 2)
             self.bias.grad = grad_bias
-        
+        if self.scale.grad is not None:
+            self.scale.grad /= torch.pow(self.scale_stnd, 2)
 
     def __repr__(self) -> str:
         return f"ReLULayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"

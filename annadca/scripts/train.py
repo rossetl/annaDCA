@@ -68,6 +68,7 @@ if __name__ == '__main__':
         column_sequences=args.column_sequences,
         column_labels=args.column_labels,
         is_binary=args.is_binary,
+        continuous_labels=args.continuous_labels,
         alphabet=args.alphabet,
         clustering_th=args.clustering_seqid,
         no_reweighting=args.no_reweighting,
@@ -235,7 +236,7 @@ if __name__ == '__main__':
     
     if torch.__version__ >= "2.0.0":
         print("Compiling the model...")
-        rbm = torch.compile(rbm)
+        rbm = torch.compile(rbm, mode="default")
         print("Model compiled successfully.")
     print("\n")
 

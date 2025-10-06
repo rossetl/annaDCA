@@ -48,61 +48,7 @@ class Layer(ABC, torch.nn.Module):
             frequencies (torch.Tensor): Empirical frequencies tensor.
         """
         assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        pass    
-    
-
-    @abstractmethod
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication W @ x operation between weight tensor W and input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication W @ x.
-        """
-        pass
-    
-    
-    @abstractmethod
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication x @ W operation between weight tensor W and input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication x @ W.
-        """
-        pass
-    
-    
-    @abstractmethod
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor.
-            y (torch.Tensor): Second input tensor.
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        pass
-    
-    
-    @abstractmethod
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor.
-            y (torch.Tensor): Second input tensor.
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        pass
+        pass 
 
 
     @abstractmethod

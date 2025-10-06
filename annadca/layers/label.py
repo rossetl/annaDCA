@@ -8,7 +8,7 @@ from adabmDCA.fasta import import_from_fasta, write_fasta
 from annadca.utils.stats import get_mean
 
 
-class LabelLayer(Layer):
+class CategoricalLabelLayer(Layer):
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
@@ -59,62 +59,6 @@ class LabelLayer(Layer):
             replacement=True
         ).t()  # Transpose to get (num_samples, l)
         return torch.nn.functional.one_hot(indices, num_classes=p.size(-1)).to(dtype=dtype).squeeze(1)
-
-
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return x @ W.t()
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return x @ W
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (l,) or (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        if len(x.shape) == 1 and len(y.shape) == 1:
-            return torch.outer(x, y)
-        elif len(x.shape) == 2 and len(y.shape) == 2:
-            return torch.einsum("nl,nh->lh", x, y)
-        else:
-            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return x * y.view(y.shape[0], 1)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -321,57 +265,6 @@ class LabelNullLayer(Layer):
         ).t()  # Transpose to get (num_samples, l)
         chains = torch.nn.functional.one_hot(indices, num_classes=p.size(-1)).to(dtype=dtype).squeeze(1)
         return torch.zeros_like(chains)
-
-
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return torch.zeros_like(x @ W.t())
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return torch.zeros_like(x @ W)
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        return torch.zeros_like(torch.einsum("nl,nh->lh", x, y))
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return torch.zeros_like(x * y.view(y.shape[0], 1))
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:

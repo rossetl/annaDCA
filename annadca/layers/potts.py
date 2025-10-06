@@ -61,62 +61,6 @@ class PottsLayer(Layer):
         return torch.nn.functional.one_hot(indices, num_classes=p.size(-1)).to(dtype=dtype)
 
 
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return torch.einsum('nh,lqh->nlq', x, W)
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return torch.einsum('nlq,lqh->nh', x, W)
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (l, q) or (batch_size, l, q).
-            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        if len(x.shape) == 2 and len(y.shape) == 1:
-            return torch.einsum("lq,h->lqh", x, y)
-        elif len(x.shape) == 3 and len(y.shape) == 2:
-            return torch.einsum('nlq,nh->lqh', x, y)
-        else:
-            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l, q).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return x * y.view(y.shape[0], 1, 1)
-
-
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
 
@@ -230,6 +174,36 @@ class PottsLayer(Layer):
         pseudo_count: float = 0,
     ):
         raise NotImplementedError("Gradient w.r.t. hidden layer not implemented for Potts layer.")
+    
+    
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        c_h: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+            c_h (torch.Tensor): Centering tensor for the hidden layer.
+        """
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
+            self.bias.grad = grad_bias
+            
+    
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        dL: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
+        **kwargs,
+    ):
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - c_v.view(-1) @ dW.view(-1, dW.shape[2]) - c_l @ dL
+            self.bias.grad = grad_bias
         
     
     def __repr__(self) -> str:

@@ -22,6 +22,7 @@ def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParse
     dca_args.add_argument("--l2",                 type=float, default=0.0,          help="(Defaults to 0.0). L2 regularization strength.")
     dca_args.add_argument("--l1l2",               type=float, default=0.0,          help="(Defaults to 0.0). L1+L2 regularization strength.")
     dca_args.add_argument("--no_standardize",     action="store_true",              help="(Defaults to False). If specified, the unstandardized version of the gradient is used.")
+    dca_args.add_argument("--continuous_labels",  action="store_true",              help="(Defaults to False). If specified, the labels are treated as continuous variables.")
     dca_args.add_argument("--init_from_profile",  action="store_true",              help="(Defaults to False). If specified, the biases are initialized using the independent-site model.")
     dca_args.add_argument("--is_binary",          action="store_true",              help="(Defaults to False). If specified, the sequences are assumed to be binary (0/1) and the model is trained accordingly.")
     dca_args.add_argument("--save_every",         type=int,   default=1000,         help="(Defaults to 1000). Frequency (in number of updates) at which the model is saved.")

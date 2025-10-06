@@ -17,6 +17,7 @@ class annaDataset(Dataset):
         column_sequences: str = "sequence",
         column_labels: str = "label",
         is_binary: bool = False,
+        continuous_labels: bool = False,
         alphabet: str = "protein",
         clustering_th: float = 0.8,
         no_reweighting: bool = True,
@@ -34,6 +35,9 @@ class annaDataset(Dataset):
         self.column_names = column_names
         self.column_sequences = column_sequences
         self.column_labels = column_labels
+        self.continuous_labels = continuous_labels
+        self.idx_to_label = {}
+        self.label_to_idx = {}
         self.L = 0
         self.q = 0
 
@@ -115,19 +119,28 @@ class annaDataset(Dataset):
 
     def parse_labels(self):
         labels = self.data[self.column_labels]
-        unique_labels = np.unique(labels.dropna())
-        self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
-        self.label_to_idx = {label: i for i, label in self.idx_to_label.items()}
-        label_indices = labels.map(self.label_to_idx).fillna(-1).astype(int)
-        num_classes = len(unique_labels)
-        one_hot = np.zeros((len(labels), num_classes), dtype=np.float32)
-        valid = label_indices != -1
-        one_hot[valid, label_indices[valid]] = 1.0
-        self.labels_one_hot = torch.tensor(
-            one_hot,
-            dtype=self.dtype,
-            device=self.device,
-        )
+        if self.continuous_labels:
+            self.labels_one_hot = torch.tensor(
+                labels.values,
+                dtype=self.dtype,
+                device=self.device,
+            ).unsqueeze(1)
+            self.labels_one_hot = (self.labels_one_hot - self.labels_one_hot.mean(dim=0, keepdim=True)) \
+                / self.labels_one_hot.std(dim=0, keepdim=True)
+        else:
+            unique_labels = np.unique(labels.dropna())
+            self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
+            self.label_to_idx = {label: i for i, label in self.idx_to_label.items()}
+            label_indices = labels.map(self.label_to_idx).fillna(-1).astype(int)
+            num_classes = len(unique_labels)
+            one_hot = np.zeros((len(labels), num_classes), dtype=np.float32)
+            valid = label_indices != -1
+            one_hot[valid, label_indices[valid]] = 1.0
+            self.labels_one_hot = torch.tensor(
+                one_hot,
+                dtype=self.dtype,
+                device=self.device,
+            )
         
         
     def parse_csv(

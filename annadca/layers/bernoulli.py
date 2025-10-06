@@ -5,6 +5,7 @@ from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
 from annadca.utils.stats import get_mean, get_meanvar
+from annadca.utils.functions import mm_left
 
 
 class BernoulliLayer(Layer):
@@ -264,7 +265,7 @@ class BernoulliLayer(Layer):
         **kwargs,
     ):
         if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - c_v @ dW - c_l @ dL
+            grad_bias = self.bias.grad / self.scale_stnd - mm_left(dW, c_v) - c_l @ dL
             self.bias.grad = grad_bias
 
     def __repr__(self) -> str:

@@ -1,14 +1,16 @@
 import os
 from typing import Optional, Tuple, Dict
 import torch
+import copy
 from torch.nn import Parameter
 from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
 from annadca.layers.gaussian import GaussianLayer
-from annadca.layers.label import LabelLayer, LabelNullLayer
+from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
 from annadca.layers.relu import ReLULayer
-from annadca.utils.stats import get_mean
+from annadca.utils.functions import batched_mm_left, batched_mm_right, batched_outer, multiply, outer
+
 
 def get_rbm(
     visible_type: str,
@@ -28,7 +30,7 @@ def get_rbm(
     assert hidden_type in available_layers, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(available_layers.keys())}"
     visible_layer = available_layers[visible_type](shape=visible_shape)
     hidden_layer = available_layers[hidden_type](shape=hidden_shape)
-    label_layer = LabelLayer(shape=(num_classes,))
+    label_layer = CategoricalLabelLayer(shape=(num_classes,))
     return AnnaRBM(
         visible_layer=visible_layer,
         hidden_layer=hidden_layer,
@@ -88,6 +90,13 @@ class AnnaRBM(torch.nn.Module):
         self.weight_matrix = Parameter(torch.randn(self.shape) * 1e-4, requires_grad=False)
         self.label_matrix = Parameter(torch.randn(self.num_classes + self.hidden_layer.shape) * 1e-4, requires_grad=False)
         
+        # compile functions for performances
+        self.gibbs_step = torch.compile(self.gibbs_step, mode="default")
+        self.sample_visibles = torch.compile(self.sample_visibles, mode="default")
+        self.sample_hiddens = torch.compile(self.sample_hiddens, mode="default")
+        self.sample_labels = torch.compile(self.sample_labels, mode="default")
+        torch.set_float32_matmul_precision('high')
+        
     
     def init_from_frequencies(
         self,
@@ -138,7 +147,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Sampled visible units given the hidden units.
         """
-        I_v = self.visible_layer.mm_right(self.weight_matrix, hidden)
+        I_v = batched_mm_right(self.weight_matrix, hidden)
         return self.visible_layer.forward(I_v, beta)
 
 
@@ -158,7 +167,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Sampled hidden units given the visible units.
         """
-        I_h = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        I_h = batched_mm_left(self.weight_matrix, visible) + batched_mm_left(self.label_matrix, label)
         return self.hidden_layer.forward(I_h, beta)
     
     
@@ -302,7 +311,7 @@ class AnnaRBM(torch.nn.Module):
         visible = visible.to(device=device, dtype=dtype)
         
         energy_vl = torch.vmap(self.compute_energy_visibles_labels, in_dims=(None, 0))(visible, torch.eye(self.num_classes[0], device=device, dtype=dtype)).t()  # (batch_size, num_classes)
-        return torch.softmax(-energy_vl, dim=-1)
+        return torch.softmax(- energy_vl, dim=-1)
 
 
     def get_patterns(self) -> torch.Tensor:
@@ -332,7 +341,7 @@ class AnnaRBM(torch.nn.Module):
         """
         energy_visible = self.visible_layer.layer_energy(visible)
         energy_hidden = self.hidden_layer.layer_energy(hidden)
-        energy_interaction = - torch.sum(self.visible_layer.mm_left(self.weight_matrix, visible) * hidden, dim=-1)
+        energy_interaction = - torch.sum(batched_mm_left(self.weight_matrix, visible) * hidden, dim=-1)
         energy_label = - torch.sum(hidden @ self.label_matrix.t() * label, dim=-1) - self.label_layer.layer_energy(label)
         return energy_visible + energy_hidden + energy_interaction + energy_label
     
@@ -351,8 +360,8 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
-        energy_fields = self.visible_layer.layer_energy(visible) - self.label_layer.layer_energy(label)
-        I_h = self.visible_layer.mm_left(self.weight_matrix, visible) + label @ self.label_matrix
+        energy_fields = self.visible_layer.layer_energy(visible) + self.label_layer.layer_energy(label)
+        I_h = batched_mm_left(self.weight_matrix, visible) + label @ self.label_matrix
         log_term = self.hidden_layer.nonlinearity(I_h)
         return energy_fields - log_term.sum(dim=-1)
     
@@ -370,7 +379,7 @@ class AnnaRBM(torch.nn.Module):
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
         energy_fields = self.visible_layer.layer_energy(visible)
-        I_lh = self.visible_layer.mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0) # (batch_size, num_classes, num_hiddens)
+        I_lh = batched_mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0) # (batch_size, num_classes, num_hiddens)
         I_l = self.hidden_layer.nonlinearity(I_lh).sum(-1) # (batch_size, num_classes) 
         return energy_fields - self.label_layer.nonlinearity(I_l)
 
@@ -381,7 +390,7 @@ class AnnaRBM(torch.nn.Module):
         **kwargs,
     ) -> torch.Tensor:
         energy_hidden = self.hidden_layer.layer_energy(hidden)
-        I_v = self.visible_layer.mm_right(self.weight_matrix, hidden) # (batch_size, num_visibles, num_states)
+        I_v = batched_mm_right(self.weight_matrix, hidden) # (batch_size, num_visibles, num_states)
         I_l = hidden @ self.label_matrix.T # (batch_size, num_classes)
         energy_visibles = - self.visible_layer.nonlinearity(I_v).sum(dim=-1)
         energy_labels = - self.label_layer.nonlinearity(I_l)
@@ -402,7 +411,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Average activity of the hidden layer.
         """
-        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        I = batched_mm_left(self.weight_matrix, visible) + batched_mm_left(self.label_matrix, label)
         return self.hidden_layer.meanvar(I)[0]
     
     
@@ -420,7 +429,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Variance of the hidden layer activity.
         """
-        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        I = batched_mm_left(self.weight_matrix, visible) + batched_mm_left(self.label_matrix, label)
         return self.hidden_layer.meanvar(I)[1]
     
     
@@ -438,7 +447,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: Mean and variance of the hidden layer activity.
         """
-        I = self.visible_layer.mm_left(self.weight_matrix, visible) + self.label_layer.mm_left(self.label_matrix, label)
+        I = batched_mm_left(self.weight_matrix, visible) + batched_mm_left(self.label_matrix, label)
         return self.hidden_layer.meanvar(I)
 
 
@@ -527,14 +536,12 @@ class AnnaRBM(torch.nn.Module):
             pseudo_count=pseudo_count,
         )
 
-        grad_weight_matrix = self.visible_layer.outer(self.visible_layer.multiply(v_pos, data["weight"]), h_pos) - \
-                             self.visible_layer.outer(v_neg, h_neg) / nchains
-        grad_label_matrix = self.label_layer.outer(self.label_layer.multiply(l_pos, data["weight"]), h_pos) - \
-                            self.label_layer.outer(l_neg, h_neg) / nchains
+        grad_weight_matrix = batched_outer(multiply(v_pos, data["weight"]), h_pos) - batched_outer(v_neg, h_neg) / nchains
+        grad_label_matrix = batched_outer(multiply(l_pos, data["weight"]), h_pos) - batched_outer(l_neg, h_neg) / nchains
 
         if standardize:
-            grad_weight_matrix /= self.visible_layer.outer(self.visible_layer.scale_stnd, self.hidden_layer.scale_stnd)
-            grad_label_matrix /= self.label_layer.outer(self.label_layer.scale_stnd, self.hidden_layer.scale_stnd)
+            grad_weight_matrix /= outer(self.visible_layer.scale_stnd, self.hidden_layer.scale_stnd)
+            grad_label_matrix /= outer(self.label_layer.scale_stnd, self.hidden_layer.scale_stnd)
 
             self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c_h=self.hidden_layer.bias_stnd)
             self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c_h=self.hidden_layer.bias_stnd)
@@ -595,7 +602,24 @@ class AnnaRBM(torch.nn.Module):
             label=chains["label"],
             beta=1.0)
         return chains
-        
     
+    
+    def get_biased_model(
+        self,
+        gen_strength: float,
+        label_strength: float,
+        wt_strength: float,
+        wt: torch.Tensor,
+    ) -> "AnnaRBM":
+        wt = wt.to(device=self.weight_matrix.device, dtype=self.weight_matrix.dtype)
+        biased_rbm = copy.deepcopy(self)
+        biased_rbm.weight_matrix.copy_(biased_rbm.weight_matrix * gen_strength)
+        biased_rbm.label_matrix.copy_(biased_rbm.label_matrix * label_strength)
+        biased_rbm.visible_layer.bias.copy_(gen_strength * biased_rbm.visible_layer.bias + wt_strength * wt)
+        biased_rbm.hidden_layer.bias.copy_(biased_rbm.hidden_layer.bias * gen_strength)
+        biased_rbm.label_layer.bias.copy_(biased_rbm.label_layer.bias * label_strength)
+        return biased_rbm
+    
+
     def __repr__(self) -> str:
         return f"AnnaRBM(visible_layer={self.visible_layer}, hidden_layer={self.hidden_layer}, num_classes={self.num_classes}, shape={self.shape})"
