@@ -4,7 +4,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.utils.stats import get_mean, get_meanvar
+from annadca.utils.stats import get_mean
 from annadca.utils.functions import mm_left
 
 
@@ -19,39 +19,47 @@ class BernoulliLayer(Layer):
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
 
 
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies: torch.Tensor,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
     ):
-        """Initializes the layer bias using the empirical frequencies of the dataset.
+        """Initializes the layer parameters using the input data statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            data (torch.Tensor): Input data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
         """
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        self.bias.copy_(torch.log(frequencies / (1 - frequencies) + 1e-10))
+        mean = get_mean(data, weights=weights, pseudo_count=pseudo_count)
+        self.bias.copy_(torch.log(mean / (1 - mean) + 1e-10))
 
 
     def init_chains(
         self,
         num_samples: int,
-        frequencies: Optional[torch.Tensor] = None,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
             num_samples (int): Number of Markov chains to initialize.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to sample the chains from.
+            data (torch.Tensor, optional): Empirical data tensor. If provided, the chains are initialized using the data statistics.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
         """
-        device = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-        if frequencies is None:
-            frequencies = torch.full(self.shape, 0.5, device=device, dtype=dtype)
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        return torch.bernoulli(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype))
+        if data is None:
+            mean = torch.sigmoid(self.bias)
+        else:
+            mean = get_mean(data, weights=weights, pseudo_count=pseudo_count)
+        return torch.bernoulli(mean.expand((num_samples,) + self.shape))
 
 
     def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:

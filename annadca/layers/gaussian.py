@@ -4,7 +4,8 @@ import numpy as np
 from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
-from annadca.utils.stats import get_mean
+from annadca.utils.stats import get_mean, get_meanvar
+from annadca.utils.functions import mm_left
 import math
 
 
@@ -20,89 +21,49 @@ class GaussianLayer(Layer):
         self.scale = Parameter(torch.ones(self.shape), requires_grad=False)
 
 
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies: torch.Tensor,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ):
-        """Initializes the layer bias using the empirical frequencies of the dataset.
+        """Initializes the layer parameters using the dataset statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            data (torch.Tensor): Input data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data. Defaults to None.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         """
-        raise NotImplementedError("Initialization from frequencies not implemented for Gaussian layer.")
-
+        mean, var = get_meanvar(data, weights=weights, pseudo_count=pseudo_count)
+        self.scale.copy_(1 / torch.sqrt(var + 1e-10))
+        self.bias.copy_(mean / (var + 1e-10))
+        
 
     def init_chains(
         self,
         num_samples: int,
-        frequencies: Optional[torch.Tensor] = None,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
             num_samples (int): Number of Markov chains to initialize.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to sample the chains from.
+            data (torch.Tensor, optional): Empirical data tensor. If provided, the chains are initialized using the data statistics.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
         """
-        device = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-        if frequencies is None:
-            frequencies = torch.full(self.shape, 0.0, device=device, dtype=dtype)
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        return torch.normal(frequencies.expand((num_samples,) + self.shape).to(device=device, dtype=dtype), 1.0)
-
-
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return x @ W.t()
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return x @ W
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        return torch.einsum("nl,nh->lh", x, y)
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return x * y.view(y.shape[0], 1)
+        if data is None:
+            mean = self.bias / (torch.abs(self.scale) + 1e-10)
+            std = torch.sqrt(1.0 / (torch.abs(self.scale) + 1e-10))
+        else:
+            mean, var = get_meanvar(data, weights=weights, pseudo_count=pseudo_count)
+            std = torch.sqrt(var + 1e-10)
+        return torch.normal(mean.expand((num_samples,) + self.shape), std.expand((num_samples,) + self.shape))
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -123,7 +84,7 @@ class GaussianLayer(Layer):
 
 
     def nonlinearity(self, x: torch.Tensor) -> torch.Tensor:
-        """Computes the non-linear activation function for the layer: x -> log(1/ √(scale) * Phi((-x + bias)/ √(scale))).
+        """Computes the non-linear activation function for the layer.
 
         Args:
             x (torch.Tensor): Input tensor.
@@ -131,8 +92,8 @@ class GaussianLayer(Layer):
         Returns:
             torch.Tensor: Output tensor after applying nonlinearity.
         """
-        abs_scale = torch.abs(self.scale)
-        return torch.pow((x + self.bias), 2) / (2.0 * abs_scale + 1e-10) + 0.5 * torch.log(2.0 * math.pi / (abs_scale + 1e-10))
+        abs_scale = torch.abs(self.scale) + 1e-10
+        return torch.pow((x + self.bias), 2) / (2.0 * abs_scale) + 0.5 * torch.log(2.0 * math.pi / abs_scale)
 
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
@@ -209,18 +170,18 @@ class GaussianLayer(Layer):
 
     def apply_gradient_hidden(
         self,
-        I_pos: torch.Tensor,
-        I_neg: torch.Tensor,
+        mean_h_pos: torch.Tensor,
+        mean_h_neg: torch.Tensor,
+        var_h_pos: torch.Tensor,
+        var_h_neg: torch.Tensor,
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        mean_pos, var_pos = self.meanvar(I_pos)
-        mean_neg, var_neg = self.meanvar(I_neg)
         # ∂Γ/∂θ = <h> = μ
-        grad_bias = get_mean(mean_pos, weights, pseudo_count) - mean_neg.mean(0)
+        grad_bias = get_mean(mean_h_pos, weights, pseudo_count) - mean_h_neg.mean(0)
         # ∂Γ/∂γ = -0.5 * <h²> = -0.5 * (μ² + σ²)
-        grad_scale_pos = - 0.5 * get_mean(torch.pow(mean_pos, 2) + var_pos, weights, pseudo_count)
-        grad_scale_neg = - 0.5 * (torch.pow(mean_neg, 2) + var_neg).mean(0)
+        grad_scale_pos = - 0.5 * get_mean(torch.pow(mean_h_pos, 2) + var_h_pos, weights, pseudo_count)
+        grad_scale_neg = - 0.5 * (torch.pow(mean_h_neg, 2) + var_h_neg).mean(0)
         grad_scale = grad_scale_pos - grad_scale_neg
         # Update gradients
         self.bias.grad = grad_bias
@@ -234,7 +195,47 @@ class GaussianLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        raise NotImplementedError("Gradient w.r.t. visible layer not implemented for Gaussian layer.")
+        mean_pos, var_pos = get_meanvar(x_pos, weights=weights, pseudo_count=pseudo_count)
+        mean_neg, var_neg = get_meanvar(x_neg)
+        # ∂Γ/∂θ = <h> = μ
+        grad_bias = mean_pos - mean_neg
+        # ∂Γ/∂γ = -0.5 * <h²> = -0.5 * (μ² + σ²)
+        grad_scale_pos = - 0.5 * (mean_pos**2 + var_pos)
+        grad_scale_neg = - 0.5 * (mean_neg**2 + var_neg)
+        grad_scale = grad_scale_pos - grad_scale_neg
+        # Update gradients
+        self.bias.grad = grad_bias
+        self.scale.grad = grad_scale
+        
+        
+    def standardize_gradient_visible(
+        self,
+        dW: torch.Tensor,
+        c_h: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+
+        Args:
+            dW (torch.Tensor): Gradient of the weight matrix.
+            c_h (torch.Tensor): Centering tensor for the hidden layer.
+        """
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
+            self.bias.grad = grad_bias
+            
+    
+    def standardize_gradient_hidden(
+        self,
+        dW: torch.Tensor,
+        dL: torch.Tensor,
+        c_v: torch.Tensor,
+        c_l: torch.Tensor,
+        **kwargs,
+    ):
+        if self.bias.grad is not None:
+            grad_bias = self.bias.grad / self.scale_stnd - mm_left(dW, c_v) - c_l @ dL
+            self.bias.grad = grad_bias
 
 
     def __repr__(self) -> str:

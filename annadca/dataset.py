@@ -40,6 +40,8 @@ class annaDataset(Dataset):
         self.label_to_idx = {}
         self.L = 0
         self.q = 0
+        self.labels_mean = torch.tensor(0.0, dtype=dtype, device=device)
+        self.labels_std = torch.tensor(1.0, dtype=dtype, device=device)
 
         # check if path_data points to a text file
         if path_data.endswith(".txt") or path_data.endswith(".dat"):
@@ -125,8 +127,10 @@ class annaDataset(Dataset):
                 dtype=self.dtype,
                 device=self.device,
             ).unsqueeze(1)
-            self.labels_one_hot = (self.labels_one_hot - self.labels_one_hot.mean(dim=0, keepdim=True)) \
-                / self.labels_one_hot.std(dim=0, keepdim=True)
+            # standardize labels
+            self.labels_mean = self.labels_one_hot.mean(dim=0)
+            self.labels_std = self.labels_one_hot.std(dim=0)
+            self.labels_one_hot = (self.labels_one_hot - self.labels_mean) / self.labels_std
         else:
             unique_labels = np.unique(labels.dropna())
             self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
@@ -141,8 +145,8 @@ class annaDataset(Dataset):
                 dtype=self.dtype,
                 device=self.device,
             )
-        
-        
+    
+
     def parse_csv(
         self,
         path_ann: str,
@@ -216,6 +220,36 @@ class annaDataset(Dataset):
         return np.array([self.idx_to_label[np.argmax(l).item()] for l in labels])
     
     
+    def standardize_labels(self, x):
+        """Takes as input the original labels and returns the standardized labels.
+
+        Args:
+            x (torch.Tensor): Original labels.
+
+        Returns:
+            torch.Tensor: Standardized labels.
+        """
+        if self.continuous_labels:
+            return (x - self.labels_mean) / self.labels_std
+        else:
+            return x
+
+
+    def unstandardize_labels(self, x):
+        """Takes as input the standardized labels and returns the original labels.
+
+        Args:
+            x (torch.Tensor): Standardized labels.
+
+        Returns:
+            torch.Tensor: Original labels.
+        """
+        if self.continuous_labels:
+            return x * self.labels_std + self.labels_mean
+        else:
+            return x
+    
+    
     def to_one_hot(
         self,
         labels: torch.Tensor | np.ndarray | list,
@@ -276,7 +310,10 @@ class annaDataset(Dataset):
         Returns:
             int: Number of categories.
         """
-        return self.labels_one_hot.shape[1]
+        if self.continuous_labels:
+            return 1
+        else:
+            return self.labels_one_hot.shape[1]
     
     
     def get_effective_size(self) -> int:

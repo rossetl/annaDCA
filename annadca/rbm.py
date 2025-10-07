@@ -7,7 +7,7 @@ from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
 from annadca.layers.gaussian import GaussianLayer
-from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
+from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer, ContinuousLabelLayer
 from annadca.layers.relu import ReLULayer
 from annadca.utils.functions import batched_mm_left, batched_mm_right, batched_outer, multiply, outer
 
@@ -18,6 +18,7 @@ def get_rbm(
     visible_shape: int | Tuple[int, ...] | torch.Size,
     hidden_shape: int | torch.Size,
     num_classes: int,
+    continuous_label: Optional[bool] = False,
     **kwargs,
 ) -> "AnnaRBM":
     available_layers = {
@@ -30,7 +31,10 @@ def get_rbm(
     assert hidden_type in available_layers, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(available_layers.keys())}"
     visible_layer = available_layers[visible_type](shape=visible_shape)
     hidden_layer = available_layers[hidden_type](shape=hidden_shape)
-    label_layer = CategoricalLabelLayer(shape=(num_classes,))
+    if continuous_label:
+        label_layer = GaussianLayer(shape=(num_classes,))
+    else:
+        label_layer = CategoricalLabelLayer(shape=(num_classes,))
     return AnnaRBM(
         visible_layer=visible_layer,
         hidden_layer=hidden_layer,
@@ -78,8 +82,8 @@ class AnnaRBM(torch.nn.Module):
         assert isinstance(visible_layer, Layer), "visible_layer must be an instance of Layer."
         assert isinstance(hidden_layer, Layer), "hidden_layer must be an instance of Layer."
         assert not isinstance(hidden_layer, PottsLayer), "hidden_layer cannot be a PottsLayer."
-        assert isinstance(num_classes, int) and num_classes > 1, "num_classes must be a positive integer greater than 1."
-        
+        assert isinstance(num_classes, int) and num_classes >= 1, "num_classes must be a positive integer greater or equal to 1."
+
         self.visible_layer = visible_layer
         self.hidden_layer = hidden_layer
         self.label_layer = label_layer
@@ -98,36 +102,45 @@ class AnnaRBM(torch.nn.Module):
         torch.set_float32_matmul_precision('high')
         
     
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies_visible: torch.Tensor,
-        frequencies_label: torch.Tensor,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
     ):
-        """Initializes the visible layer bias using the empirical frequencies of the dataset.
+        """Initializes the visible and label layer parameters using the dataset statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            visible (torch.Tensor): Input visible data tensor.
+            label (torch.Tensor): Input label data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data. Defaults to None.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         """
-        self.visible_layer.init_from_frequencies(frequencies_visible)
-        self.label_layer.init_from_frequencies(frequencies_label)
+        self.visible_layer.init_params_from_data(visible, weights=weights, pseudo_count=pseudo_count)
+        self.label_layer.init_params_from_data(label, weights=weights, pseudo_count=pseudo_count)
 
 
     def init_chains(
         self,
         num_samples: int,
-        frequencies: Optional[torch.Tensor] = None,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> Dict[str, torch.Tensor]:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
             num_samples (int): Number of Markov chains to initialize.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to sample the visible chains from.
+            data (torch.Tensor, optional): Empirical data tensor to sample the visible chains from.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             Dict[str, torch.Tensor]: A dictionary containing the chain type and the initialized chains tensor.
         """
         chains = {}
-        chains["visible"] = self.visible_layer.init_chains(num_samples=num_samples, frequencies=frequencies)
+        chains["visible"] = self.visible_layer.init_chains(num_samples=num_samples, data=data, weights=weights, pseudo_count=pseudo_count)
         chains["hidden"] = self.hidden_layer.init_chains(num_samples=num_samples)
         chains["label"] = self.label_layer.init_chains(num_samples=num_samples)
         return chains
@@ -361,7 +374,7 @@ class AnnaRBM(torch.nn.Module):
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
         energy_fields = self.visible_layer.layer_energy(visible) + self.label_layer.layer_energy(label)
-        I_h = batched_mm_left(self.weight_matrix, visible) + label @ self.label_matrix
+        I_h = batched_mm_left(self.weight_matrix, visible) + batched_mm_left(self.label_matrix, label) # (batch_size, num_hiddens)
         log_term = self.hidden_layer.nonlinearity(I_h)
         return energy_fields - log_term.sum(dim=-1)
     
@@ -381,7 +394,7 @@ class AnnaRBM(torch.nn.Module):
         energy_fields = self.visible_layer.layer_energy(visible)
         I_lh = batched_mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0) # (batch_size, num_classes, num_hiddens)
         I_l = self.hidden_layer.nonlinearity(I_lh).sum(-1) # (batch_size, num_classes) 
-        return energy_fields - self.label_layer.nonlinearity(I_l)
+        return energy_fields - self.label_layer.nonlinearity(I_l).sum(dim=-1)
 
 
     def compute_energy_hiddens(
@@ -391,7 +404,7 @@ class AnnaRBM(torch.nn.Module):
     ) -> torch.Tensor:
         energy_hidden = self.hidden_layer.layer_energy(hidden)
         I_v = batched_mm_right(self.weight_matrix, hidden) # (batch_size, num_visibles, num_states)
-        I_l = hidden @ self.label_matrix.T # (batch_size, num_classes)
+        I_l = batched_mm_right(self.label_matrix, hidden) # (batch_size, num_classes)
         energy_visibles = - self.visible_layer.nonlinearity(I_v).sum(dim=-1)
         energy_labels = - self.label_layer.nonlinearity(I_l)
         return energy_hidden + energy_visibles + energy_labels

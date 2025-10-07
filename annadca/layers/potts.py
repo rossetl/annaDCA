@@ -19,40 +19,48 @@ class PottsLayer(Layer):
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
 
 
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies: torch.Tensor,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
     ):
-        """Initializes the layer bias using the empirical frequencies of the dataset.
+        """Initializes the layer parameters using the input data statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            data (torch.Tensor): Input data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
         """
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        self.bias.copy_(torch.log(frequencies) - 1.0 / self.shape[1] * torch.sum(torch.log(frequencies), 0))
+        mean = get_mean(data, weights=weights, pseudo_count=pseudo_count)
+        self.bias.copy_(torch.log(mean) - 1.0 / self.shape[1] * torch.sum(torch.log(mean), 0))
 
 
     def init_chains(
         self,
         num_samples: int,
-        frequencies: Optional[torch.Tensor] = None,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
             num_samples (int): Number of Markov chains to initialize.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to sample the chains from.
+            data (torch.Tensor, optional): Empirical data tensor. If provided, the chains are initialized using the data statistics.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
         """
-        device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
-        if frequencies is None:
-            frequencies = torch.full(self.shape, 0.5)
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        frequencies = frequencies.to(device=device, dtype=dtype)
-        p = frequencies / frequencies.sum(dim=-1, keepdim=True)
+        if data is None:
+            mean = torch.softmax(self.bias, dim=-1)
+        else:
+            mean = get_mean(data, weights=weights, pseudo_count=pseudo_count)
+        p = mean / mean.sum(dim=-1, keepdim=True)
         indices = torch.multinomial(
             p.view(-1, p.size(-1)), 
             num_samples=num_samples, 

@@ -22,14 +22,18 @@ class Layer(ABC, torch.nn.Module):
     @abstractmethod
     def init_chains(
         self,
-        num_samples: Optional[int] = None,
-        frequencies: Optional[torch.Tensor] = None,
+        num_samples: int,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
-            num_samples (int): Number of Markov chains to initialize. Ignored if `frequencies` is provided.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to initialize the chains. If provided, `num_chains` is ignored.
+            num_samples (int): Number of Markov chains to initialize.
+            data (torch.Tensor, optional): Empirical data tensor. If provided, the chains are initialized using the data statistics.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
@@ -38,17 +42,21 @@ class Layer(ABC, torch.nn.Module):
     
     
     @abstractmethod
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies: torch.Tensor,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ):
-        """Initializes the layer bias using the empirical frequencies of the dataset.
+        """Initializes the layer parameters using the input data statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            data (torch.Tensor): Input data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
         """
-        assert frequencies.shape == self.shape, f"Frequencies shape ({frequencies.shape}) must match layer shape ({self.shape})."
-        pass 
+        pass
 
 
     @abstractmethod

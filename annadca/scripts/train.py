@@ -13,7 +13,6 @@ from adabmDCA.utils import get_device, get_dtype
 from annadca.parser import add_args_train
 from annadca.dataset import annaDataset
 from annadca.rbm import get_rbm, save_checkpoint
-from annadca.utils.stats import get_mean
 
 torch.set_float32_matmul_precision('high')
 
@@ -47,7 +46,8 @@ if __name__ == '__main__':
     print(template.format("Standardized gradient:", str(not args.no_standardize)))
     print(template.format("L1 regularization:", args.l1))
     print(template.format("L2 regularization:", args.l2))
-    print(template.format("Profile initialization:", args.init_from_profile))
+    print(template.format("Data initialization:", str(args.init_from_data)))
+    print(template.format("Continuous labels:", str(args.continuous_labels)))
     if args.pseudocount is not None:
         print(template.format("Pseudocount:", args.pseudocount))
     print(template.format("Random seed:", args.seed))
@@ -76,7 +76,6 @@ if __name__ == '__main__':
         device=device,
         dtype=dtype,
     )
-    data = dataset.data_one_hot
     tokens = dataset.tokens
     print(f"Alphabet: {dataset.tokens}")
     print(f"Dataset imported successfully: M={len(dataset)}, L={dataset.L}, q={dataset.q}.")
@@ -148,6 +147,7 @@ if __name__ == '__main__':
             visible_shape=num_visibles,
             hidden_shape=num_hiddens,
             num_classes=num_classes,
+            continuous_label=args.continuous_labels,
         )
         rbm.to(device=device, dtype=dtype)
     elif not dataset.is_binary:
@@ -157,19 +157,9 @@ if __name__ == '__main__':
             visible_shape=(num_visibles, num_states),
             hidden_shape=num_hiddens,
             num_classes=num_classes,
+            continuous_label=args.continuous_labels,
         )
         rbm.to(device=device, dtype=dtype)
-        
-    frequences_visible = get_mean(
-        x=data,
-        weights=dataset.weights,
-        pseudo_count=args.pseudocount,
-    )
-    frequences_labels = get_mean(
-        x=dataset.labels_one_hot,
-        weights=dataset.weights,
-        pseudo_count=args.pseudocount,
-    )
 
     if args.checkpoint is not None:
         checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -183,15 +173,18 @@ if __name__ == '__main__':
         print("Model parameters and chains loaded from", args.checkpoint)
         
     else:
-        if args.init_from_profile:            
-            rbm.init_from_frequencies(
-                frequencies_visible=frequences_visible,
-                frequencies_label=frequences_labels,
+        if args.init_from_data:
+            rbm.init_params_from_data(
+                visible=dataset.data_one_hot,
+                label=dataset.labels_one_hot,
+                weights=dataset.weights,
+                pseudo_count=args.pseudocount,
             )
+            
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
-        chains = rbm.init_chains(num_samples=args.nchains, frequencies=frequences_visible)
+        chains = rbm.init_chains(num_samples=args.nchains, data=dataset.data_one_hot, weights=dataset.weights, pseudo_count=args.pseudocount)
         # Select the optimizer
         optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
         for key, value in rbm.named_parameters():
@@ -215,7 +208,8 @@ if __name__ == '__main__':
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
         f.write(template.format("standardized:", str(not args.no_standardize)))
-        f.write(template.format("profile init:", args.init_from_profile))
+        f.write(template.format("data init:", str(args.init_from_data)))
+        f.write(template.format("continuous labels:", str(args.continuous_labels)))
         f.write(template.format("l1 strength:", args.l1))
         f.write(template.format("l2 strength:", args.l2))
         f.write(template.format("random seed:", args.seed))
