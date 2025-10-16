@@ -42,6 +42,11 @@ class annaDataset(Dataset):
         self.q = 0
         self.labels_mean = torch.tensor(0.0, dtype=dtype, device=device)
         self.labels_std = torch.tensor(1.0, dtype=dtype, device=device)
+        
+        if is_binary:
+            self.tokens = "01"
+        else:
+            self.tokens = get_tokens(alphabet)
 
         # check if path_data points to a text file
         if path_data.endswith(".txt") or path_data.endswith(".dat"):
@@ -79,11 +84,20 @@ class annaDataset(Dataset):
                 )
             else:
                 raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
+            
+        # Filter rows where sequences have unknown letters
+        mask = []
+        tokens_list = [a for a in self.tokens]
+        for seq in self.data[column_sequences].values:
+            if not all(a in tokens_list for a in seq):
+                mask.append(False)
+            else:
+                mask.append(True)
+        self.data = self.data[mask].reset_index(drop=True)
+        print(f"Filtered out {len(mask) - sum(mask)} sequences with unknown letters. Remaining sequences: {sum(mask)}.")
 
-        if is_binary:
-            self.tokens = "01"
-        else:
-            self.tokens = get_tokens(alphabet)
+        # take only unique sequences
+        self.data = self.data.drop_duplicates(subset=[column_sequences]).reset_index(drop=True)
 
         # encode sequences
         self.data_one_hot = torch.tensor(
@@ -156,12 +170,12 @@ class annaDataset(Dataset):
     ):
         
         df = pd.read_csv(path_ann, na_values=[""])
-        assert column_names.lower() in df.columns, f"Column {column_names} not found in the labels file."
-        assert column_labels.lower() in df.columns, f"Column {column_labels} not found in the labels file."
+        assert column_names in df.columns, f"Column {column_names} not found in the labels file."
+        assert column_labels in df.columns, f"Column {column_labels} not found in the labels file."
         
         # If all data comes from the csv file:
         if len(self.data) == 0:
-            assert column_sequences.lower() in df.columns, f"Column {column_sequences} not found in the labels file."
+            assert column_sequences in df.columns, f"Column {column_sequences} not found in the labels file."
             self.data = df.filter(items=[column_names, column_sequences, column_labels])
         # Else, names and data have been already parsed from a fasta file:
         else:

@@ -239,4 +239,4 @@ class GaussianLayer(Layer):
 
 
     def __repr__(self) -> str:
-        return f"GaussianLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"GaussianLayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"

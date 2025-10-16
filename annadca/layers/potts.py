@@ -215,4 +215,4 @@ class PottsLayer(Layer):
         
     
     def __repr__(self) -> str:
-        return f"PottsLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"PottsLayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"

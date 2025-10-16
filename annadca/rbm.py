@@ -7,7 +7,7 @@ from annadca.layers.layer import Layer
 from annadca.layers.bernoulli import BernoulliLayer
 from annadca.layers.potts import PottsLayer
 from annadca.layers.gaussian import GaussianLayer
-from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer, ContinuousLabelLayer
+from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
 from annadca.layers.relu import ReLULayer
 from annadca.utils.functions import batched_mm_left, batched_mm_right, batched_outer, multiply, outer
 
@@ -391,10 +391,10 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Energy tensor of shape (batch_size,).
         """
-        energy_fields = self.visible_layer.layer_energy(visible)
-        I_lh = batched_mm_left(self.weight_matrix, visible).unsqueeze(1) + self.label_matrix.unsqueeze(0) # (batch_size, num_classes, num_hiddens)
-        I_l = self.hidden_layer.nonlinearity(I_lh).sum(-1) # (batch_size, num_classes) 
-        return energy_fields - self.label_layer.nonlinearity(I_l).sum(dim=-1)
+        assert not isinstance(self.label_layer, GaussianLayer), "The label layer can't be continuous for this function to work"
+        all_labels = torch.eye(self.num_classes[0], device=visible.device, dtype=visible.dtype) # (num_classes, num_classes)
+        energies_vl = torch.vmap(self.compute_energy_visibles_labels, in_dims=(None, 0))(visible, all_labels).t()  # (batch_size, num_classes)
+        return - torch.logsumexp(- energies_vl, dim=-1)
 
 
     def compute_energy_hiddens(
@@ -402,6 +402,7 @@ class AnnaRBM(torch.nn.Module):
         hidden: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
+        assert not isinstance(self.label_layer, GaussianLayer), "The label layer can't be continuous for this function to work"
         energy_hidden = self.hidden_layer.layer_energy(hidden)
         I_v = batched_mm_right(self.weight_matrix, hidden) # (batch_size, num_visibles, num_states)
         I_l = batched_mm_right(self.label_matrix, hidden) # (batch_size, num_classes)
@@ -625,14 +626,25 @@ class AnnaRBM(torch.nn.Module):
         wt: torch.Tensor,
     ) -> "AnnaRBM":
         wt = wt.to(device=self.weight_matrix.device, dtype=self.weight_matrix.dtype)
-        biased_rbm = copy.deepcopy(self)
-        biased_rbm.weight_matrix.copy_(biased_rbm.weight_matrix * gen_strength)
-        biased_rbm.label_matrix.copy_(biased_rbm.label_matrix * label_strength)
-        biased_rbm.visible_layer.bias.copy_(gen_strength * biased_rbm.visible_layer.bias + wt_strength * wt)
-        biased_rbm.hidden_layer.bias.copy_(biased_rbm.hidden_layer.bias * gen_strength)
-        biased_rbm.label_layer.bias.copy_(biased_rbm.label_layer.bias * label_strength)
+        biased_rbm = AnnaRBM(
+            visible_layer=copy.deepcopy(self.visible_layer),
+            hidden_layer=copy.deepcopy(self.hidden_layer),
+            label_layer=copy.deepcopy(self.label_layer),
+            num_classes=self.num_classes[0],
+        )
+        biased_rbm.to(device=self.weight_matrix.device, dtype=self.weight_matrix.dtype)
+        biased_rbm.weight_matrix.data.copy_(self.weight_matrix * gen_strength)
+        biased_rbm.label_matrix.data.copy_(self.label_matrix * label_strength)
+        for k, v in biased_rbm.visible_layer.named_parameters():
+            v.data.copy_(self.visible_layer.state_dict()[k] * gen_strength)
+            if "bias" in k:
+                v.data.copy_(v.data + wt_strength * wt)
+        for k, v in biased_rbm.hidden_layer.named_parameters():
+            v.data.copy_(self.hidden_layer.state_dict()[k] * gen_strength)
+        for k, v in biased_rbm.label_layer.named_parameters():
+            v.data.copy_(self.label_layer.state_dict()[k] * label_strength)
         return biased_rbm
-    
+
 
     def __repr__(self) -> str:
         return f"AnnaRBM(visible_layer={self.visible_layer}, hidden_layer={self.hidden_layer}, num_classes={self.num_classes}, shape={self.shape})"

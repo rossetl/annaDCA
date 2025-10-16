@@ -16,7 +16,7 @@ class BernoulliLayer(Layer):
     ):
         super().__init__(shape=shape, **kwargs)
         assert len(self.shape) == 1, f"Bernoulli layer shape must be one-dimensional, got {self.shape}."
-        self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
+        self.bias = Parameter(torch.zeros(self.shape), requires_grad=False, )
 
 
     def init_params_from_data(
@@ -277,4 +277,4 @@ class BernoulliLayer(Layer):
             self.bias.grad = grad_bias
 
     def __repr__(self) -> str:
-        return f"BernoulliLayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"BernoulliLayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"

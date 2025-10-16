@@ -283,4 +283,4 @@ class ReLULayer(Layer):
             self.scale.grad /= torch.pow(self.scale_stnd, 2)
 
     def __repr__(self) -> str:
-        return f"ReLULayer(shape={self.shape}, device={self.device}, dtype={self.dtype})"
+        return f"ReLULayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"
