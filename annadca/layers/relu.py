@@ -6,6 +6,7 @@ from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
 from annadca.utils.tg import scer, logscer, sample_truncated_normal
 from annadca.utils.stats import get_mean
+from annadca.utils.functions import mm_left
 
 
 class ReLULayer(Layer):
@@ -20,14 +21,19 @@ class ReLULayer(Layer):
         self.scale = Parameter(torch.ones(self.shape), requires_grad=False)
 
 
-    def init_from_frequencies(
+    def init_params_from_data(
         self,
-        frequencies: torch.Tensor,
+        data: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0
     ):
-        """Initializes the layer bias using the empirical frequencies of the dataset.
+        """Initializes the layer parameters using the input data statistics.
 
         Args:
-            frequencies (torch.Tensor): Empirical frequencies tensor.
+            data (torch.Tensor): Input data tensor.
+            weights (Optional[torch.Tensor], optional): Optional weight tensor for the data.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+
         """
         raise NotImplementedError("Initialization from frequencies not implemented for ReLU layer.")
 
@@ -35,13 +41,17 @@ class ReLULayer(Layer):
     def init_chains(
         self,
         num_samples: int,
-        frequencies: Optional[torch.Tensor] = None,
+        data: Optional[torch.Tensor] = None,
+        weights: Optional[torch.Tensor] = None,
+        pseudo_count: float = 0.0,
     ) -> torch.Tensor:
         """Initializes the Markov chains for Gibbs sampling.
 
         Args:
             num_samples (int): Number of Markov chains to initialize.
-            frequencies (torch.Tensor, optional): Empirical frequencies tensor to sample the chains from.
+            data (torch.Tensor, optional): Empirical data tensor. If provided, the chains are initialized using the data statistics.
+            weights (torch.Tensor, optional): Weights for the data samples. If None, uniform weights are assumed.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
 
         Returns:
             torch.Tensor: Initialized Markov chains tensor.
@@ -54,62 +64,6 @@ class ReLULayer(Layer):
         a = torch.zeros_like(mu)
         b = torch.full_like(mu, float('inf'))
         return sample_truncated_normal(mu, sigma, a, b)
-
-
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return x @ W.t()
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return x @ W
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (l,) or (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        if len(x.shape) == 1 and len(y.shape) == 1:
-            return torch.outer(x, y)
-        elif len(x.shape) == 2 and len(y.shape) == 2:
-            return torch.einsum("nl,nh->lh", x, y)
-        else:
-            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return x * y.view(y.shape[0], 1)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -274,13 +228,12 @@ class ReLULayer(Layer):
         dL: torch.Tensor,
         c_v: torch.Tensor,
         c_l: torch.Tensor,
+        c_h: torch.Tensor,
         **kwargs,
     ):
         if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - c_v @ dW - c_l @ dL + (self.bias_stnd * self.scale) / torch.pow(self.scale_stnd, 2)
+            grad_bias = self.bias.grad -  mm_left(dW, c_v) - c_l @ dL + c_h 
             self.bias.grad = grad_bias
-        if self.scale.grad is not None:
-            self.scale.grad /= torch.pow(self.scale_stnd, 2)
 
     def __repr__(self) -> str:
         return f"ReLULayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"

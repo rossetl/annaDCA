@@ -13,9 +13,6 @@ class Layer(ABC, torch.nn.Module):
         super(Layer, self).__init__()
         assert isinstance(shape, int) or isinstance(shape, torch.Size) or isinstance(shape, tuple) or isinstance(shape, list), "Shape must be integer, tuple, list, or torch.Size."
         self.shape = torch.Size(shape) if (isinstance(shape, tuple) or isinstance(shape, list)) else torch.Size((shape,))
-        # Batch-specific variables for centering and scaling the inputs
-        self.bias_stnd = torch.zeros(self.shape, requires_grad=False)
-        self.scale_stnd = torch.ones(self.shape, requires_grad=False)
         self.kwargs = kwargs
 
         
@@ -191,74 +188,92 @@ class Layer(ABC, torch.nn.Module):
             pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
         """
         pass
-    
-    
-    def fit(
-        self,
-        x: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0
-    ):
-        mean, var = get_meanvar(x, weights=weights, pseudo_count=pseudo_count)
-        self.bias_stnd, self.scale_stnd = mean, torch.ones_like(torch.sqrt(var + 1e-8))
-
-
-    def transform(
-        self,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        return (x - self.bias_stnd) / self.scale_stnd
-    
-    
-    def fit_transform(
-        self,
-        x: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-        pseudo_count: float = 0.0
-    ) -> torch.Tensor:
-        """Fits the layer to the input data and transforms it.
-
-        Args:
-            x (torch.Tensor): Input tensor to fit and transform.
-            weights (Optional[torch.Tensor], optional): Weights for the input tensor. If None, uniform weights are assumed.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-
-        Returns:
-            torch.Tensor: Transformed tensor.
-        """
-        self.fit(x, weights=weights, pseudo_count=pseudo_count)
-        return self.transform(x)
 
 
     @abstractmethod
-    def standardize_gradient_visible(
+    def standardize_params_visible(
         self,
-        dW: torch.Tensor,
-        c_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
 
         Args:
-            dW (torch.Tensor): Gradient of the weight matrix.
-            c_h (torch.Tensor): Centering tensor for the hidden layer.
+            scale_v (torch.Tensor): Scaling tensor for the visible layer.
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            W_std (torch.Tensor): Standardized weight matrix.
         """
         pass
     
     
     @abstractmethod
-    def standardize_gradient_hidden(
+    def unstandardize_params_visible(
         self,
-        dW: torch.Tensor,
-        c_v: torch.Tensor,
-        c_l: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
+        """Transforms the parameters of the layer, mapping it from the standardized space to the original space.
 
         Args:
-            dW (torch.Tensor): Gradient of the weight matrix.
-            c_v (torch.Tensor): Centering tensor for the visible layer.
-            c_l (torch.Tensor): Centering tensor for the label layer.
+            scale_v (torch.Tensor): Scaling tensor for the visible layer.
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def standardize_params_hidden(
+        self,
+        offset_h: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_v: torch.Tensor,
+        scale_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        scale_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
+
+        Args:
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
+        """
+        pass
+    
+    
+    @abstractmethod
+    def unstandardize_params_hidden(
+        self,
+        offset_h: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_v: torch.Tensor,
+        scale_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        scale_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the standardized space to the original space.
+
+        Args:
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
         """
         pass

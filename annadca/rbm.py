@@ -10,6 +10,7 @@ from annadca.layers.gaussian import GaussianLayer
 from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
 from annadca.layers.relu import ReLULayer
 from annadca.utils.functions import batched_mm_left, batched_mm_right, batched_outer, multiply, outer
+from annadca.utils.stats import get_meanvar, get_mean
 
 
 def get_rbm(
@@ -93,7 +94,15 @@ class AnnaRBM(torch.nn.Module):
         
         self.weight_matrix = Parameter(torch.randn(self.shape) * 1e-4, requires_grad=False)
         self.label_matrix = Parameter(torch.randn(self.num_classes + self.hidden_layer.shape) * 1e-4, requires_grad=False)
-        
+
+        # Scaling parameters for the centered RBM
+        self.offset_v = Parameter(torch.zeros(self.visible_layer.shape, dtype=torch.float32), requires_grad=False)
+        self.offset_h = Parameter(torch.zeros(self.hidden_layer.shape, dtype=torch.float32), requires_grad=False)
+        self.offset_l = Parameter(torch.zeros(self.num_classes, dtype=torch.float32), requires_grad=False)
+        self.scale_v = Parameter(torch.ones(self.visible_layer.shape, dtype=torch.float32), requires_grad=False)
+        self.scale_h = Parameter(torch.ones(self.hidden_layer.shape, dtype=torch.float32), requires_grad=False)
+        self.scale_l = Parameter(torch.ones(self.num_classes, dtype=torch.float32), requires_grad=False)
+
         # compile functions for performances
         self.gibbs_step = torch.compile(self.gibbs_step, mode="default")
         self.sample_visibles = torch.compile(self.sample_visibles, mode="default")
@@ -483,9 +492,9 @@ class AnnaRBM(torch.nn.Module):
                     self.weight_matrix.grad -= l1l2_strength * self.weight_matrix.abs().mean(dim=(1, 2), keepdim=True) * self.weight_matrix.sign()
                 else:
                     self.weight_matrix.grad -= l1l2_strength * self.weight_matrix.abs().mean(1, keepdim=True) * self.weight_matrix.sign()
-        
+                    
 
-    def apply_gradient(
+    def apply_gradient_old(
         self,
         data: Dict[str, torch.Tensor],
         chains: Dict[str, torch.Tensor],
@@ -513,15 +522,18 @@ class AnnaRBM(torch.nn.Module):
         h_pos, var_h_pos = self.meanvar_hidden_activation(data["visible"], data["label"])
         h_neg, var_h_neg = self.meanvar_hidden_activation(chains["visible"], chains["label"])
         
+        # compute offsets
+        self.offset_v, self.scale_v = get_meanvar(data["visible"], weights=data["weight"], pseudo_count=pseudo_count)
+        self.offset_l, self.scale_l = get_meanvar(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
+        self.offset_h, self.scale_h = get_meanvar(h_pos, weights=data["weight"], pseudo_count=pseudo_count)
+
         if standardize:
-            v_pos = self.visible_layer.fit_transform(data["visible"], weights=data["weight"], pseudo_count=pseudo_count)
-            l_pos = self.label_layer.fit_transform(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
-            v_neg = self.visible_layer.transform(chains["visible"])
-            l_neg = self.label_layer.transform(chains["label"])
-            h_pos = self.hidden_layer.fit_transform(h_pos, weights=data["weight"], pseudo_count=pseudo_count)
-            h_neg = self.hidden_layer.transform(h_neg)
-            var_h_pos /= torch.pow(self.hidden_layer.scale_stnd, 2)
-            var_h_neg /= torch.pow(self.hidden_layer.scale_stnd, 2)
+            v_pos = data["visible"] - self.offset_v
+            l_pos = data["label"] - self.offset_l
+            v_neg = chains["visible"] - self.offset_v
+            l_neg = chains["label"] - self.offset_l
+            h_pos = h_pos - self.offset_h
+            h_neg = h_neg - self.offset_h
         
         else:
             v_pos, l_pos = data["visible"], data["label"]
@@ -554,22 +566,160 @@ class AnnaRBM(torch.nn.Module):
         grad_label_matrix = batched_outer(multiply(l_pos, data["weight"]), h_pos) - batched_outer(l_neg, h_neg) / nchains
 
         if standardize:
-            grad_weight_matrix /= outer(self.visible_layer.scale_stnd, self.hidden_layer.scale_stnd)
-            grad_label_matrix /= outer(self.label_layer.scale_stnd, self.hidden_layer.scale_stnd)
-
-            self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c_h=self.hidden_layer.bias_stnd)
-            self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c_h=self.hidden_layer.bias_stnd)
+            self.visible_layer.standardize_gradient_visible(dW=grad_weight_matrix, c_h=self.offset_h)
+            self.label_layer.standardize_gradient_visible(dW=grad_label_matrix, c_h=self.offset_h)
             self.hidden_layer.standardize_gradient_hidden(
                 dW=grad_weight_matrix,
                 dL=grad_label_matrix,
-                c_v=self.visible_layer.bias_stnd,
-                c_l=self.label_layer.bias_stnd,
+                c_v=self.offset_v,
+                c_l=self.offset_l,
+                c_h=self.offset_h,
             )
 
         self.weight_matrix.grad = grad_weight_matrix
         self.label_matrix.grad = grad_label_matrix
         # Regularization
         self.regularize(l1_strength, l2_strength, l1l2_strength)
+        
+        
+    def apply_gradient(
+        self,
+        data: Dict[str, torch.Tensor],
+        chains: Dict[str, torch.Tensor],
+        pseudo_count: float = 0.0,
+        l1_strength: float = 0.0,
+        l2_strength: float = 0.0,
+        l1l2_strength: float = 0.0,
+        standardize: bool = False,
+    ) -> None:
+        """Applies the computed gradient to the model parameters.
+
+        Args:
+            data (Dict[str, torch.Tensor]): Data batch.
+            chains (Dict[str, torch.Tensor]): Chains.
+            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
+            l1_strength (float, optional): L1 regularization weight. Defaults to 0.0.
+            l2_strength (float, optional): L2 regularization weight. Defaults to 0.0.
+            l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
+            standardize (bool, optional): Whether to apply gradient standardization. Defaults to False.
+        """
+        # Normalize the weights
+        data["weight"] = data["weight"] / data["weight"].sum()
+        nchains = len(chains["visible"])
+        
+        # compute offsets
+        offset_v, scale_v = get_meanvar(data["visible"], weights=data["weight"], pseudo_count=pseudo_count)
+        offset_l, scale_l = get_meanvar(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
+
+        if standardize:
+            v_pos = (data["visible"] - offset_v) / scale_v
+            l_pos = (data["label"] - offset_l) / scale_l
+            v_neg = (chains["visible"] - offset_v) / scale_v
+            l_neg = (chains["label"] - offset_l) / scale_l
+
+        else:
+            v_pos, l_pos = data["visible"], data["label"]
+            v_neg, l_neg = chains["visible"], chains["label"]
+            
+        # Hidden distribution means and variances
+        h_pos, var_h_pos = self.meanvar_hidden_activation(v_pos, l_pos)
+        h_neg, var_h_neg = self.meanvar_hidden_activation(v_neg, l_neg)
+        
+        offset_h, scale_h2 = get_meanvar(h_pos, weights=data["weight"], pseudo_count=pseudo_count)
+        # Apply law of total variance
+        scale_h = torch.sqrt(scale_h2 + var_h_pos.mean(dim=0))
+        
+        if standardize:
+            h_pos = (h_pos - offset_h) / scale_h
+            h_neg = (h_neg - offset_h) / scale_h
+
+        self.visible_layer.apply_gradient_visible(
+            x_pos=v_pos,
+            x_neg=v_neg,
+            weights=data["weight"],
+            pseudo_count=pseudo_count,
+        )
+        
+        self.label_layer.apply_gradient_visible(
+            x_pos=l_pos,
+            x_neg=l_neg,
+            weights=data["weight"],
+            pseudo_count=pseudo_count,
+        )
+
+        self.hidden_layer.apply_gradient_hidden(
+            mean_h_pos=h_pos,
+            mean_h_neg=h_neg,
+            var_h_pos=var_h_pos,
+            var_h_neg=var_h_neg,
+            weights=data["weight"],
+            pseudo_count=pseudo_count,
+        )
+
+        grad_weight_matrix = batched_outer(multiply(v_pos, data["weight"]), h_pos) - batched_outer(v_neg, h_neg) / nchains
+        grad_label_matrix = batched_outer(multiply(l_pos, data["weight"]), h_pos) - batched_outer(l_neg, h_neg) / nchains
+
+        self.weight_matrix.grad = grad_weight_matrix
+        self.label_matrix.grad = grad_label_matrix
+
+        # standardize params before applying gradients
+        if standardize:
+            self.unstandardize_rbm(
+                offset_v=offset_v,
+                scale_v=scale_v,
+                offset_h=offset_h,
+                scale_h=scale_h,
+                offset_l=offset_l,
+                scale_l=scale_l,
+            )
+        # Regularization
+        self.regularize(l1_strength, l2_strength, l1l2_strength)
+        
+        
+    def standardize_rbm(
+        self,
+        offset_v: torch.Tensor,
+        scale_v: torch.Tensor,
+        offset_h: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_l: torch.Tensor,
+        scale_l: torch.Tensor,
+    ):
+        """Standarizes the RBM parameters, mapping the classical RBM to the standardized one.
+        
+        Args:
+            offset_v (torch.Tensor): Visible layer offset.
+            scale_v (torch.Tensor): Visible layer scale.
+            offset_h (torch.Tensor): Hidden layer offset.
+            scale_h (torch.Tensor): Hidden layer scale.
+            offset_l (torch.Tensor): Label layer offset.
+            scale_l (torch.Tensor): Label layer scale.
+        """
+        self.visible_layer.standardize_params_visible(scale_v=self.scale_v, scale_h=self.scale_h, offset_h=self.offset_h, W=self.weight_matrix)
+        self.hidden_layer.standardize_params_hidden(offset_h=self.offset_h, scale_h=self.scale_h, offset_v=self.offset_v, scale_v=self.scale_v, offset_l=self.offset_l, scale_l=self.scale_l, W=self.weight_matrix, L=self.label_matrix)
+        self.label_layer.standardize_params_visible(scale_v=self.scale_l, scale_h=self.scale_h, offset_h=self.offset_h, W=self.label_matrix)
+        self.weight_matrix.copy_(self.weight_matrix / outer(self.scale_v, self.scale_h))
+        self.label_matrix.copy_(self.label_matrix / outer(self.scale_l, self.scale_h))
+        # Update offsets and scales
+        self.offset_v.copy_(offset_v)
+        self.scale_v.copy_(scale_v + 1e-10)
+        self.offset_h.copy_(offset_h)
+        self.scale_h.copy_(scale_h + 1e-10)
+        self.offset_l.copy_(offset_l)
+        self.scale_l.copy_(scale_l + 1e-10)
+
+    def unstandardize_rbm(
+        self,
+        
+    ):
+        """Unstandarizes the RBM parameters, mapping the standardized RBM to the classical one.
+        """
+        self.weight_matrix.copy_(self.weight_matrix * outer(self.scale_v, self.scale_h))
+        self.label_matrix.copy_(self.label_matrix * outer(self.scale_l, self.scale_h))
+        self.visible_layer.unstandardize_params_visible(scale_v=self.scale_v, scale_h=self.scale_h, offset_h=self.offset_h, W=self.weight_matrix)
+        self.hidden_layer.unstandardize_params_hidden(offset_h=self.offset_h, scale_h=self.scale_h, offset_v=self.offset_v, scale_v=self.scale_v, offset_l=self.offset_l, scale_l=self.scale_l, W=self.weight_matrix, L=self.label_matrix)
+        self.label_layer.unstandardize_params_visible(scale_v=self.scale_l, scale_h=self.scale_h, offset_h=self.offset_h, W=self.label_matrix)
+
 
 
     def forward(
@@ -598,6 +748,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             Dict[str, torch.Tensor]: Updated chains.
         """
+        
         # Compute the gradient of the Log-Likelihood
         self.apply_gradient(
             data=data_batch,
@@ -609,6 +760,12 @@ class AnnaRBM(torch.nn.Module):
             standardize=standardize,
         )
         
+        # THE GRADIENT IS APPLIED OUTSIDE! NEED TO 
+        # 1) APPLY GRADIENT
+        # 2) UNSTANDARDIZE RBM
+        # 3) SAMPLE NEW CHAINS
+        # 4) STANDARDIZE RBM AGAIN
+
         # Update the persistent chains
         chains = self.sample(
             gibbs_steps=gibbs_steps,

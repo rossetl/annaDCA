@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Dict
 from torch.nn import Parameter
 from adabmDCA.fasta import import_from_fasta, write_fasta
 from annadca.utils.stats import get_mean
-from annadca.utils.functions import mm_left
+from annadca.utils.functions import mm_left, outer
 
 
 class BernoulliLayer(Layer):
@@ -60,62 +60,6 @@ class BernoulliLayer(Layer):
         else:
             mean = get_mean(data, weights=weights, pseudo_count=pseudo_count)
         return torch.bernoulli(mean.expand((num_samples,) + self.shape))
-
-
-    def mm_right(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation W @ x between weight tensor W and hidden input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: W @ x.
-        """
-        return x @ W.t()
-    
-    
-    def mm_left(self, W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """Layer-specific matrix multiplication operation x @ W between weight tensor W and visible input tensor x.
-
-        Args:
-            W (torch.Tensor): Weight tensor.
-            x (torch.Tensor): Input tensor.
-            
-        Returns:
-            torch.Tensor: Output tensor after layer-specific matrix multiplication: x @ W.
-        """
-        return x @ W
-    
-    
-    def outer(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific outer product operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (l,) or (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (h,) or (batch_size, h).
-        Returns:
-            torch.Tensor: Output tensor after layer-specific outer product.
-        """
-        if len(x.shape) == 1 and len(y.shape) == 1:
-            return torch.outer(x, y)
-        elif len(x.shape) == 2 and len(y.shape) == 2:
-            return torch.einsum("nl,nh->lh", x, y)
-        else:
-            raise ValueError(f"Invalid input shapes: {x.shape}, {y.shape}")
-
-
-    def multiply(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Layer-specific element-wise multiplication operation between input tensors x and y.
-
-        Args:
-            x (torch.Tensor): First input tensor of shape (batch_size, l).
-            y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-        Returns:
-            torch.Tensor: Output tensor after layer-specific element-wise multiplication.
-        """
-        return x * y.view(y.shape[0], 1)
 
 
     def forward(self, I: torch.Tensor, beta: float) -> torch.Tensor:
@@ -186,7 +130,6 @@ class BernoulliLayer(Layer):
             fname=filepath,
             headers=headers,
             sequences=chains["visible"].cpu().numpy(),
-            numeric_input=True,
             tokens=tokens,
             remove_gaps=False,
         )
@@ -247,34 +190,79 @@ class BernoulliLayer(Layer):
         self.bias.grad = grad_bias
 
 
-    def standardize_gradient_visible(
+    def standardize_params_visible(
         self,
-        dW: torch.Tensor,
-        c_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
-
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
+        
         Args:
-            dW (torch.Tensor): Gradient of the weight matrix.
-            c_h (torch.Tensor): Centering tensor for the hidden layer.
+            scale_v (torch.Tensor): Scaling tensor for the visible layer.
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            W (torch.Tensor): Weight matrix.
         """
-        if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
-            self.bias.grad = grad_bias
-            
+        self.bias.copy_(self.bias / scale_v - (W / outer(scale_v, scale_h)) @ offset_h)
+        
     
-    def standardize_gradient_hidden(
+    def unstandardize_params_visible(
         self,
-        dW: torch.Tensor,
-        dL: torch.Tensor,
-        c_v: torch.Tensor,
-        c_l: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - mm_left(dW, c_v) - c_l @ dL
-            self.bias.grad = grad_bias
+        self.bias.copy_(scale_v * (self.bias + (W / outer(scale_v, scale_h)) @ offset_h))
+        
+
+    def standardize_params_hidden(
+        self,
+        scale_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_l: torch.Tensor,
+        offset_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
+        Args:
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
+        """
+        self.bias.copy_(self.bias / scale_h - mm_left(W / outer(scale_v, scale_h), offset_v) - offset_l @ (L / outer(scale_l, scale_h)))
+        
+    
+    def unstandardize_params_hidden(
+        self,
+        scale_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_l: torch.Tensor,
+        offset_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the standardized space to the original space.
+        
+        Args:
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
+        """
+        self.bias.copy_(scale_h * (self.bias + mm_left(W / outer(scale_v, scale_h), offset_v) + offset_l @ (L / outer(scale_l, scale_h))))
+        
 
     def __repr__(self) -> str:
         return f"BernoulliLayer(shape={self.shape}, device={self.bias.device}, dtype={self.bias.dtype})"

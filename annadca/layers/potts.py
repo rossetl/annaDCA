@@ -6,6 +6,7 @@ from torch.nn.functional import one_hot
 from torch.nn import Parameter
 from adabmDCA.fasta import write_fasta, get_tokens, import_from_fasta
 from annadca.utils.stats import get_mean
+from annadca.utils.functions import mm_left, outer
         
 
 class PottsLayer(Layer):
@@ -131,7 +132,6 @@ class PottsLayer(Layer):
             fname=filepath,
             headers=headers,
             sequences=chains["visible"].argmax(dim=-1).cpu().numpy(),
-            numeric_input=True,
             tokens=tokens,
             remove_gaps=False,
         )
@@ -184,34 +184,78 @@ class PottsLayer(Layer):
         raise NotImplementedError("Gradient w.r.t. hidden layer not implemented for Potts layer.")
     
     
-    def standardize_gradient_visible(
+    def standardize_params_visible(
         self,
-        dW: torch.Tensor,
-        c_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        """Transforms the gradient of the layer's parameters, mapping it from the standardized space back to the original space.
-
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
+        
         Args:
-            dW (torch.Tensor): Gradient of the weight matrix.
-            c_h (torch.Tensor): Centering tensor for the hidden layer.
+            scale_v (torch.Tensor): Scaling tensor for the visible layer.
+            offset_h (torch.Tensor): Centering tensor for the hidden layer.
+            W (torch.Tensor): Weight matrix.
         """
-        if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
-            self.bias.grad = grad_bias
-            
+        self.bias.copy_(self.bias / scale_v - (W / outer(scale_v, scale_h)) @ offset_h)
+        
     
-    def standardize_gradient_hidden(
+    def unstandardize_params_visible(
         self,
-        dW: torch.Tensor,
-        dL: torch.Tensor,
-        c_v: torch.Tensor,
-        c_l: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_h: torch.Tensor,
+        offset_h: torch.Tensor,
+        W: torch.Tensor,
         **kwargs,
     ):
-        if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - c_v.view(-1) @ dW.view(-1, dW.shape[2]) - c_l @ dL
-            self.bias.grad = grad_bias
+        self.bias.copy_(scale_v * (self.bias + (W / outer(scale_v, scale_h)) @ offset_h))
+        
+
+    def standardize_params_hidden(
+        self,
+        scale_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_l: torch.Tensor,
+        offset_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the original space to the standardized space.
+        Args:
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
+        """
+        self.bias.copy_(self.bias / scale_h - mm_left(W / outer(scale_v, scale_h), offset_v) - offset_l @ (L / outer(scale_l, scale_h)))
+        
+    
+    def unstandardize_params_hidden(
+        self,
+        scale_h: torch.Tensor,
+        scale_v: torch.Tensor,
+        scale_l: torch.Tensor,
+        offset_v: torch.Tensor,
+        offset_l: torch.Tensor,
+        W: torch.Tensor,
+        L: torch.Tensor,
+        **kwargs,
+    ):
+        """Transforms the parameters of the layer, mapping it from the standardized space to the original space.
+        
+        Args:
+            scale_h (torch.Tensor): Scaling tensor for the hidden layer.
+            offset_v (torch.Tensor): Centering tensor for the visible layer.
+            offset_l (torch.Tensor): Centering tensor for the label layer.
+            W_std (torch.Tensor): Standardized weight matrix.
+            L_std (torch.Tensor): Standardized label matrix.
+        """
+        self.bias.copy_(scale_h * (self.bias + mm_left(W / outer(scale_v, scale_h), offset_v) + offset_l @ (L / outer(scale_l, scale_h))))
         
     
     def __repr__(self) -> str:

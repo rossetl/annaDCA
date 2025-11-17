@@ -124,7 +124,6 @@ class GaussianLayer(Layer):
             fname=filepath,
             headers=headers,
             sequences=chains["visible"].cpu().numpy(),
-            numeric_input=True,
             tokens=tokens,
             remove_gaps=False,
         )
@@ -221,7 +220,7 @@ class GaussianLayer(Layer):
             c_h (torch.Tensor): Centering tensor for the hidden layer.
         """
         if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - dW @ c_h
+            grad_bias = self.bias.grad - dW @ c_h
             self.bias.grad = grad_bias
             
     
@@ -231,10 +230,11 @@ class GaussianLayer(Layer):
         dL: torch.Tensor,
         c_v: torch.Tensor,
         c_l: torch.Tensor,
+        c_h: torch.Tensor,
         **kwargs,
     ):
         if self.bias.grad is not None:
-            grad_bias = self.bias.grad / self.scale_stnd - mm_left(dW, c_v) - c_l @ dL
+            grad_bias = self.bias.grad - mm_left(dW, c_v) - c_l @ dL + c_h
             self.bias.grad = grad_bias
 
 
