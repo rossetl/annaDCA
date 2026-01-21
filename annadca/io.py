@@ -134,7 +134,6 @@ def _save_chains(
         fname=filename,
         headers=headers,
         sequences=visible,
-        numeric_input=True,
         tokens=tokens,
         remove_gaps=False,
     )
