@@ -24,6 +24,7 @@ setup(
         ],
     },
     install_requires=[
-        'adabmDCA>=0.7.0'
+        'adabmDCA>=0.7.0',
+        'h5py>=3.12.0',
     ],
 )

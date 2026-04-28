@@ -18,6 +18,7 @@ from annadca import annaRBMbin, annaRBMcat
 from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
 from annadca.train import pcd
 from annadca.utils import get_saved_updates
+from annadca.io import _load_model_from_ptt
 
 
 # import command-line input arguments
@@ -60,7 +61,7 @@ if __name__ == '__main__':
     print("\n")
 
     # Check that input files exist
-    for path in [args.data, args.annotations, args.path_params, args.path_chains]:
+    for path in [args.data, args.annotations, args.path_params, args.path_chains, args.path_params_ptt]:
         if path is not None and not os.path.exists(path):
             raise FileNotFoundError(f"Input file {path} not found.")
 
@@ -103,7 +104,7 @@ if __name__ == '__main__':
         }
         
     # Check if the files in file_paths already exist. If so, delete them
-    if args.path_params is None:
+    if args.path_params is None and args.path_params_ptt is None:
         for path in file_paths.values():
             if os.path.exists(path):
                 # Ask for confirmation before deleting
@@ -159,14 +160,52 @@ if __name__ == '__main__':
         pseudo_count=args.pseudocount,
     )
 
-    if args.path_params is not None:
+    if args.path_params_ptt is not None:
+        if args.path_params is not None or args.path_chains is not None:
+            raise ValueError("Use either --path_params_ptt or --path_params/--path_chains, not both.")
+        upd, params, chains = _load_model_from_ptt(
+            filename=args.path_params_ptt,
+            index=None,
+            device=device,
+            dtype=dtype,
+            num_labels=num_labels,
+            label_frequencies=frequency_labels.squeeze(0) if frequency_labels.ndim > 1 else frequency_labels,
+        )
+        rbm.params = params
+        rbm.device = device
+        rbm.dtype = dtype
+
+        if dataset.is_binary and params["weight_matrix"].dim() != 2:
+            raise ValueError("Checkpoint mismatch: binary dataset expects a 2D weight_matrix.")
+        if not dataset.is_binary and params["weight_matrix"].dim() != 3:
+            raise ValueError("Checkpoint mismatch: categorical dataset expects a 3D weight_matrix.")
+
+        if "label" not in chains:
+            label_probs = frequency_labels.squeeze(0)
+            label_probs = label_probs / label_probs.sum()
+            label_idx = torch.multinomial(label_probs, len(chains["visible"]), replacement=True)
+            chains["label"] = torch.nn.functional.one_hot(
+                label_idx,
+                num_classes=num_labels,
+            ).to(device=device, dtype=dtype)
+
+        if "hidden" not in chains:
+            chains.update(rbm.sample_hiddens(
+                visible=chains["visible"],
+                label=chains["label"],
+                beta=1.0,
+            ))
+
+        args.nchains = len(chains["visible"])
+        print(f"Model parameters and chains at update {upd} loaded from", args.path_params_ptt)
+    elif args.path_params is not None:
         upd = rbm.load(
             filename=args.path_params,
             device=device,
             dtype=dtype,
             set_rng_state=True,
         )
-        print("Model parameters loaded from", args.path_params)
+        print(f"Model parameters at update {upd} loaded from", args.path_params)
     else:
         if args.init_from_profile:
             init_frequences_visible = frequences_visible
@@ -196,7 +235,7 @@ if __name__ == '__main__':
             alphabet=tokens,
         )
         print("Chains loaded from", args.path_chains)
-    else:
+    elif args.path_params_ptt is None:
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
@@ -305,17 +344,21 @@ if __name__ == '__main__':
         pbar.close()
         
         # Save the final model and chains if upd is not present in the h5 archive
-        saved_updates = get_saved_updates(file_paths["params"])
-        if upd not in saved_updates:
-            rbm.save(
-                filename=file_paths["params"],
-                num_updates=upd,
-            )
-            rbm.save_chains(
-                filename=file_paths["chains"],
-                visible=chains["visible"],
-                label=chains["label"],
-                alphabet=dataset.tokens,
-            )
-            with open(file_paths["log"], "a") as f:
-                f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
+        # Check that the parameters file exists. If not, print a warning and skip the saving.
+        if not os.path.exists(file_paths["params"]):
+            warnings.warn(f"Parameters file {file_paths['params']} not found. Maybe --nepochs is smaller than the number of updates of the loaded model. Please set --nepochs to a value larger than {upd}.")
+        else:
+            saved_updates = get_saved_updates(file_paths["params"])
+            if upd not in saved_updates:
+                rbm.save(
+                    filename=file_paths["params"],
+                    num_updates=upd,
+                )
+                rbm.save_chains(
+                    filename=file_paths["chains"],
+                    visible=chains["visible"],
+                    label=chains["label"],
+                    alphabet=dataset.tokens,
+                )
+                with open(file_paths["log"], "a") as f:
+                    f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))

@@ -1,10 +1,12 @@
 from typing import Dict, Tuple
 
+import os
 import h5py
 import numpy as np
 import torch
 from adabmDCA.fasta import write_fasta, get_tokens
-import os
+from rbms.io import load_model
+from rbms.utils import get_saved_updates as get_saved_updates_ptt
 
 from annadca.utils import get_saved_updates
 
@@ -20,29 +22,29 @@ def _save_model(
         filename (str): Path to the h5 archive where to store the model.
         num_updates (int): Number of updates performed so far.
     """
-    # create the file if it does not exist
-    if not os.path.exists(filename):
-        with h5py.File(filename, "w") as f:
-            pass
-    else:
-        with h5py.File(filename, "a") as f:
-            checkpoint = f.create_group(f"update_{num_updates}")
-    
-            # Save the parameters of the model
-            checkpoint["vbias"] = params["vbias"].detach().cpu().numpy()
-            checkpoint["hbias"] = params["hbias"].detach().cpu().numpy()
-            checkpoint["lbias"] = params["lbias"].detach().cpu().numpy()
-            checkpoint["weight_matrix"] = params["weight_matrix"].detach().cpu().numpy()
-            checkpoint["label_matrix"] = params["label_matrix"].detach().cpu().numpy()
-            
-    
-            # Save current random state
-            checkpoint["torch_rng_state"] = torch.get_rng_state()
-            checkpoint["numpy_rng_arg0"] = np.random.get_state()[0]
-            checkpoint["numpy_rng_arg1"] = np.random.get_state()[1]
-            checkpoint["numpy_rng_arg2"] = np.random.get_state()[2]
-            checkpoint["numpy_rng_arg3"] = np.random.get_state()[3]
-            checkpoint["numpy_rng_arg4"] = np.random.get_state()[4]
+    # overwrite the file with a new archive containing only the current checkpoint
+    dirname = os.path.dirname(filename)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
+
+    with h5py.File(filename, "w") as f:
+        checkpoint = f.create_group(f"update_{num_updates}")
+
+        # Save the parameters of the model
+        checkpoint["vbias"] = params["vbias"].detach().cpu().numpy()
+        checkpoint["hbias"] = params["hbias"].detach().cpu().numpy()
+        checkpoint["lbias"] = params["lbias"].detach().cpu().numpy()
+        checkpoint["weight_matrix"] = params["weight_matrix"].detach().cpu().numpy()
+        checkpoint["label_matrix"] = params["label_matrix"].detach().cpu().numpy()
+
+        # Save current random state
+        checkpoint["torch_rng_state"] = np.array(torch.get_rng_state(), dtype="uint8")
+        np_state = np.random.get_state()
+        checkpoint["numpy_rng_arg0"] = np_state[0]
+        checkpoint["numpy_rng_arg1"] = np_state[1]
+        checkpoint["numpy_rng_arg2"] = np_state[2]
+        checkpoint["numpy_rng_arg3"] = np_state[3]
+        checkpoint["numpy_rng_arg4"] = np_state[4]
     
 
 def _load_model(
@@ -110,7 +112,66 @@ def _load_model(
     
     return index, params
 
+def _load_model_from_ptt(
+    filename: str,
+    index: int | None,
+    device: torch.device,
+    dtype: torch.dtype,
+    num_labels: int,
+    label_frequencies: torch.Tensor | None = None,
+) -> Tuple[int, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+    """Loads a RBM from a ptt file.
 
+    Args:
+        filename (str): Path to the ptt file.
+        index (int | None): Index of the machine to load. If None, the last machine is loaded.
+        device (torch.device): PyTorch device on which to load the parameters and the chains.
+        dtype (torch.dtype): Dtype for the parameters and the chains.
+        num_labels (int): Number of label classes for the annaRBM.
+        label_frequencies (torch.Tensor | None): Label frequencies for initialization. Defaults to None.
+
+    Returns:
+        Tuple[int, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Update index, parameters and chains of the loaded model.
+    """
+    if index is None:
+        index: int = get_saved_updates_ptt(filename)[-1]
+    params_ptt, perm_chains_ptt, _ = load_model(filename, index, device, dtype)
+    vbias = params_ptt["vbias"] if isinstance(params_ptt, dict) else params_ptt.vbias
+    hbias = params_ptt["hbias"] if isinstance(params_ptt, dict) else params_ptt.hbias
+    weight_matrix = params_ptt["weight_matrix"] if isinstance(params_ptt, dict) else params_ptt.weight_matrix
+    is_binary = weight_matrix.dim() == 2
+    H = weight_matrix.shape[-1]
+    params = {
+        "vbias": vbias,
+        "hbias": hbias,
+        "weight_matrix": weight_matrix,
+    }
+    if label_frequencies is None:
+        lbias = torch.zeros(num_labels, device=device, dtype=dtype)
+    else:
+        label_frequencies = label_frequencies.to(device=device, dtype=dtype)
+        label_frequencies = torch.clamp(label_frequencies, min=1e-8, max=1.0 - 1e-8)
+        lbias = torch.log(label_frequencies) - torch.log(1.0 - label_frequencies)
+    params["lbias"] = lbias
+    params["label_matrix"] = torch.randn(num_labels, H, device=device, dtype=dtype) * 1e-4
+
+    if is_binary:
+        perm_chains_ptt["visible"] = perm_chains_ptt["visible"].to(device=device, dtype=dtype)
+    else:
+        q = weight_matrix.shape[1]
+        chains_visible_onehot = torch.nn.functional.one_hot(
+            perm_chains_ptt["visible"].long(),
+            num_classes=q,
+        ).to(device=device, dtype=dtype)
+        perm_chains_ptt["visible"] = chains_visible_onehot
+
+    for key in ["hidden", "label"]:
+        if key in perm_chains_ptt:
+            perm_chains_ptt[key] = perm_chains_ptt[key].to(device=device, dtype=dtype)
+
+    return index, params, perm_chains_ptt
+    
+    
 def _save_chains(
     filename: str,
     visible: torch.Tensor,

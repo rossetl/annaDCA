@@ -24,6 +24,7 @@ def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParse
     dca_args.add_argument("--uncentered",         action="store_true",              help="(Defaults to False). If specified, the uncentered version of the gradient is used.")
     dca_args.add_argument("--init_from_profile",  action="store_true",              help="(Defaults to False). If specified, the biases are initialized using the independent-site model.")
     dca_args.add_argument("--is_binary",          action="store_true",              help="(Defaults to False). If specified, the sequences are assumed to be binary (0/1) and the model is trained accordingly.")
+    dca_args.add_argument("--path_params_ptt",   type=str,   default=None,         help="(Defaults to None). If provided, the model is loaded from the provided ptt file and the training is resumed. The ptt file contains both parameters and chains.")
     dca_args.add_argument("--seed",               type=int,   default=0,            help="(Defaults to 0). Seed for the random number generator.")
     dca_args.add_argument("--device",             type=str,   default="cuda",       help="(Defaults to cuda). Device to be used.")
     dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float16", "float32", "float64"])
