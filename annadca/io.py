@@ -1,14 +1,13 @@
+import os
 from typing import Dict, Tuple
 
-import os
 import h5py
 import numpy as np
 import torch
-from adabmDCA.fasta import write_fasta, get_tokens
-from rbms.io import load_model
-from rbms.utils import get_saved_updates as get_saved_updates_ptt
+from adabmDCA.fasta import get_tokens, write_fasta
 
 from annadca.utils import get_saved_updates
+
 
 def _save_model(
     params: Dict[str, torch.Tensor],
@@ -45,7 +44,7 @@ def _save_model(
         checkpoint["numpy_rng_arg2"] = np_state[2]
         checkpoint["numpy_rng_arg3"] = np_state[3]
         checkpoint["numpy_rng_arg4"] = np_state[4]
-    
+
 
 def _load_model(
     filename: str,
@@ -72,7 +71,7 @@ def _load_model(
     else:
         if index not in list_updates:
             raise ValueError(f"Index {index} not found in the h5 archive.")
-    
+
     last_file_key = f"update_{index}"
     with h5py.File(filename, "r") as f:
         weight_matrix = torch.tensor(
@@ -88,7 +87,7 @@ def _load_model(
         vbias = torch.tensor(f[last_file_key]["vbias"][()], device=device, dtype=dtype)
         hbias = torch.tensor(f[last_file_key]["hbias"][()], device=device, dtype=dtype)
         lbias = torch.tensor(f[last_file_key]["lbias"][()], device=device, dtype=dtype)
-        
+
         if set_rng_state:
             torch.set_rng_state(torch.tensor(np.array(f[last_file_key]["torch_rng_state"])))
             np_rng_state = tuple(
@@ -101,7 +100,7 @@ def _load_model(
                 ]
             )
             np.random.set_state(np_rng_state)
-        
+
     params = {
         "weight_matrix": weight_matrix,
         "label_matrix": label_matrix,
@@ -109,8 +108,9 @@ def _load_model(
         "hbias": hbias,
         "lbias": lbias,
     }
-    
+
     return index, params
+
 
 def _load_model_from_ptt(
     filename: str,
@@ -133,12 +133,22 @@ def _load_model_from_ptt(
     Returns:
         Tuple[int, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]: Update index, parameters and chains of the loaded model.
     """
+    try:
+        from rbms.io import load_model
+        from rbms.utils import get_saved_updates as get_saved_updates_ptt
+    except ImportError as exc:
+        raise ImportError(
+            "PTT import requires the optional dependency: uv pip install annadca[ptt]"
+        ) from exc
+
     if index is None:
         index: int = get_saved_updates_ptt(filename)[-1]
     params_ptt, perm_chains_ptt, _ = load_model(filename, index, device, dtype)
     vbias = params_ptt["vbias"] if isinstance(params_ptt, dict) else params_ptt.vbias
     hbias = params_ptt["hbias"] if isinstance(params_ptt, dict) else params_ptt.hbias
-    weight_matrix = params_ptt["weight_matrix"] if isinstance(params_ptt, dict) else params_ptt.weight_matrix
+    weight_matrix = (
+        params_ptt["weight_matrix"] if isinstance(params_ptt, dict) else params_ptt.weight_matrix
+    )
     is_binary = weight_matrix.dim() == 2
     H = weight_matrix.shape[-1]
     params = {
@@ -170,8 +180,8 @@ def _load_model_from_ptt(
             perm_chains_ptt[key] = perm_chains_ptt[key].to(device=device, dtype=dtype)
 
     return index, params, perm_chains_ptt
-    
-    
+
+
 def _save_chains(
     filename: str,
     visible: torch.Tensor,
@@ -179,7 +189,7 @@ def _save_chains(
     alphabet: str,
 ) -> None:
     """Save the persistent chains on a fasta file.
-    
+
     Args:
         filename (str): Path to the fasta file.
         visible (torch.Tensor): Visible units of the chains.
@@ -198,4 +208,3 @@ def _save_chains(
         tokens=tokens,
         remove_gaps=False,
     )
-

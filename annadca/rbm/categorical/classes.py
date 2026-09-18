@@ -1,31 +1,32 @@
-from typing import Optional, Dict
-import numpy as np
-from tqdm.autonotebook import tqdm
+from typing import Dict, Optional
 
+import numpy as np
 import torch
-from adabmDCA.fasta import import_from_fasta, get_tokens
-from adabmDCA.functional import one_hot
 from adabmDCA.dca import get_seqid
+from adabmDCA.fasta import get_tokens, import_from_fasta
+from adabmDCA.functional import one_hot
+from tqdm.autonotebook import tqdm
 
 from annadca.classes import annaRBM
 from annadca.io import _save_chains
+from annadca.rbm.categorical.grad import _compute_gradient
+from annadca.rbm.categorical.init import _init_chains, _init_parameters
+from annadca.rbm.categorical.sampling import (
+    _predict_labels,
+    _sample,
+    _sample_conditioned,
+    _sample_hiddens,
+    _sample_labels,
+    _sample_visibles,
+)
 from annadca.rbm.categorical.statmech import (
     _compute_energy,
-    _compute_energy_visibles,
     _compute_energy_hiddens,
-    _update_weights_AIS,
+    _compute_energy_visibles,
     _compute_log_likelihood,
+    _update_weights_AIS,
 )
-from annadca.rbm.categorical.sampling import (
-    _sample,
-    _sample_hiddens,
-    _sample_visibles,
-    _sample_labels,
-    _sample_conditioned,
-    _predict_labels,
-)
-from annadca.rbm.categorical.init import _init_parameters, _init_chains
-from annadca.rbm.categorical.grad import _compute_gradient
+from annadca.rbm.sampling import get_sampler
 
 
 class annaRBMcat(annaRBM):
@@ -36,8 +37,7 @@ class annaRBMcat(annaRBM):
         dtype: Optional[torch.dtype] = torch.float32,
     ):
         super().__init__(params, device, dtype)
-        
-        
+
     def to(
         self,
         device: Optional[torch.device] | None = None,
@@ -53,8 +53,7 @@ class annaRBMcat(annaRBM):
             annaRBM: annaRBM instance with the parameters moved to the specified device and/or dtype.
         """
         return super().to(device, dtype)
-    
-    
+
     def clone(
         self,
         device: Optional[torch.device] | None = None,
@@ -73,16 +72,17 @@ class annaRBMcat(annaRBM):
             device = self.device
         if dtype is None:
             dtype = self.dtype
-            
-        cloned_params = {k: v.clone().to(device=device, dtype=dtype) for k, v in self.params.items()}
-            
+
+        cloned_params = {
+            k: v.clone().to(device=device, dtype=dtype) for k, v in self.params.items()
+        }
+
         return annaRBMcat(
             params=cloned_params,
             device=device,
             dtype=dtype,
         )
-    
-    
+
     def save(
         self,
         filename: str,
@@ -95,8 +95,7 @@ class annaRBMcat(annaRBM):
             num_updates (int): Number of updates performed so far.
         """
         return super().save(filename, num_updates)
-    
-    
+
     def load(
         self,
         filename: str,
@@ -123,9 +122,8 @@ class annaRBMcat(annaRBM):
             device=device,
             dtype=dtype,
             set_rng_state=set_rng_state,
-            )
-        
-        
+        )
+
     def compute_energy(
         self,
         visible: torch.Tensor,
@@ -143,10 +141,9 @@ class annaRBMcat(annaRBM):
         Returns:
             torch.Tensor: Energy of the model on the given configuration.
         """
-    
+
         return _compute_energy(visible, hidden, label, self.params)
-    
-    
+
     def compute_energy_visibles(
         self,
         visible: torch.Tensor,
@@ -161,8 +158,7 @@ class annaRBMcat(annaRBM):
             torch.Tensor: Energy of the data points.
         """
         return _compute_energy_visibles(visible, self.params)
-    
-    
+
     def compute_energy_hiddens(
         self,
         hidden: torch.Tensor,
@@ -177,8 +173,7 @@ class annaRBMcat(annaRBM):
             torch.Tensor: Energy of the model on the hidden layer.
         """
         return _compute_energy_hiddens(hidden, self.params)
-    
-    
+
     def sample_hiddens(
         self,
         visible: torch.Tensor,
@@ -196,10 +191,11 @@ class annaRBMcat(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled hidden units and hidden magnetization.
         """
-        h, mh = _sample_hiddens(visible, label, self.params, beta)
+        h, mh = get_sampler("hiddens", _sample_hiddens, kwargs.get("backend", "torch"))(
+            visible, label, self.params, beta
+        )
         return {"hidden": h, "hidden_mag": mh}
-    
-    
+
     def sample_visibles(
         self,
         hidden: torch.Tensor,
@@ -215,10 +211,11 @@ class annaRBMcat(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled visible units and visible magnetization.
         """
-        v, mv = _sample_visibles(hidden, self.params, beta)
+        v, mv = get_sampler("visibles", _sample_visibles, kwargs.get("backend", "torch"))(
+            hidden, self.params, beta
+        )
         return {"visible": v, "visible_mag": mv}
-    
-    
+
     def sample_labels(
         self,
         hidden: torch.Tensor,
@@ -234,10 +231,11 @@ class annaRBMcat(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled labels and label magnetization.
         """
-        l, ml = _sample_labels(hidden, self.params, beta)
+        l, ml = get_sampler("labels", _sample_labels, kwargs.get("backend", "torch"))(
+            hidden, self.params, beta
+        )
         return {"label": l, "label_mag": ml}
-    
-    
+
     def sample(
         self,
         gibbs_steps: int,
@@ -268,18 +266,29 @@ class annaRBMcat(annaRBM):
             raise ValueError("Either visible, label or a positive num_samples must be provided.")
 
         # Initialize missing visible/label
-        chains_init = self.init_chains(num_samples=num_samples)
-        if visible is None:
-            visible = chains_init["visible"]
-        if label is None:
-            label = chains_init["label"]
+        if visible is None or label is None:
+            chains_init = self.init_chains(num_samples=num_samples)
+            if visible is None:
+                visible = chains_init["visible"]
+            if label is None:
+                label = chains_init["label"]
 
         if visible.shape[0] != label.shape[0]:
-            raise ValueError(f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same.")
+            raise ValueError(
+                f"The number of visible units ({visible.shape[0]}) and labels ({label.shape[0]}) must be the same."
+            )
 
-        visible, hidden, label, visible_mag, hidden_mag, label_mag = _sample(gibbs_steps, visible, label, self.params, beta)
-        return {"visible": visible, "hidden": hidden, "label": label, "visible_mag": visible_mag, "hidden_mag": hidden_mag, "label_mag": label_mag}
-
+        visible, hidden, label, visible_mag, hidden_mag, label_mag = _sample(
+            gibbs_steps, visible, label, self.params, beta, backend=kwargs.get("backend", "torch")
+        )
+        return {
+            "visible": visible,
+            "hidden": hidden,
+            "label": label,
+            "visible_mag": visible_mag,
+            "hidden_mag": hidden_mag,
+            "label_mag": label_mag,
+        }
 
     def sample_conditioned(
         self,
@@ -302,7 +311,7 @@ class annaRBMcat(annaRBM):
         Returns:
             Dict[str, torch.Tensor]: Sampled visible and hidden units.
         """
-       
+
         if isinstance(targets, np.ndarray):
             targets = torch.tensor(targets, device=self.device, dtype=self.dtype)
         elif isinstance(targets, torch.Tensor):
@@ -312,7 +321,9 @@ class annaRBMcat(annaRBM):
             visible = self.init_chains(num_samples=num_samples)["visible"]
         else:
             if visible.shape[0] != num_samples:
-                raise ValueError(f"The number of visible units ({visible.shape[0]}) and targets ({num_samples}) must be the same.")
+                raise ValueError(
+                    f"The number of visible units ({visible.shape[0]}) and targets ({num_samples}) must be the same."
+                )
 
         visible, hidden, visible_mag, hidden_mag = _sample_conditioned(
             gibbs_steps=gibbs_steps,
@@ -320,10 +331,15 @@ class annaRBMcat(annaRBM):
             visible=visible,
             params=self.params,
             beta=beta,
+            backend=kwargs.get("backend", "torch"),
         )
 
-        return {"visible": visible, "hidden": hidden, "visible_mag": visible_mag, "hidden_mag": hidden_mag}
-
+        return {
+            "visible": visible,
+            "hidden": hidden,
+            "visible_mag": visible_mag,
+            "hidden_mag": hidden_mag,
+        }
 
     def predict_labels(
         self,
@@ -347,12 +363,11 @@ class annaRBMcat(annaRBM):
         p_labels = _predict_labels(
             visible=visible,
             params=self.params,
-            beta=beta,            
+            beta=beta,
         )
-        
+
         return p_labels
-    
-    
+
     def compute_mixing_time(
         self,
         visible: torch.Tensor,
@@ -379,9 +394,9 @@ class annaRBMcat(annaRBM):
             sampler_function = self.sample_conditioned
         else:
             sampler_function = self.sample
-    
+
         torch.manual_seed(0)
-        
+
         # Initialize chains at random
         sample_t = self.init_chains(len(visible))
         sample_t["visible"] = visible
@@ -389,7 +404,7 @@ class annaRBMcat(annaRBM):
             sample_t["label"] = label
         # Copy sample_t to a new variable sample_t_half
         sample_t_half = {k: v.clone() for k, v in sample_t.items()}
-    
+
         # Initialize variables
         results = {
             "seqid_t": [],
@@ -398,7 +413,7 @@ class annaRBMcat(annaRBM):
             "std_seqid_t_t_half": [],
             "t_half": [],
         }
-    
+
         # Loop through sweeps
         if show_progress:
             pbar = tqdm(
@@ -409,7 +424,7 @@ class annaRBMcat(annaRBM):
                 ascii="-#",
             )
             pbar.set_description("Iterating until the mixing time is reached")
-    
+
         for i in range(1, niter + 1):
             if show_progress:
                 pbar.update(1)
@@ -417,32 +432,40 @@ class annaRBMcat(annaRBM):
             torch.manual_seed(i)
             # Perform a sweep on sample_t
             sample_t = sampler_function(gibbs_steps=1, **sample_t, targets=label)
-    
+
             if i % 2 == 0:
                 # Set the seed to i/2
                 torch.manual_seed(i // 2)
                 # Perform a sweep on sample_t_half
                 sample_t_half = sampler_function(gibbs_steps=1, **sample_t_half, targets=label)
-    
+
                 if i % log_every == 0:
                     # Calculate the average distance between sample_t and itself shuffled
                     perm = torch.randperm(len(sample_t["visible"]))
-                    seqid_t, std_seqid_t = get_seqid(sample_t["visible"], sample_t["visible"][perm], average=True)
+                    seqid_t, std_seqid_t = get_seqid(
+                        sample_t["visible"], sample_t["visible"][perm], average=True
+                    )
                     seqid_t, std_seqid_t = seqid_t / L, std_seqid_t / L
 
                     # Calculate the average distance between sample_t and sample_t_half
-                    seqid_t_t_half, std_seqid_t_t_half = get_seqid(sample_t["visible"], sample_t_half["visible"], average=True)
+                    seqid_t_t_half, std_seqid_t_t_half = get_seqid(
+                        sample_t["visible"], sample_t_half["visible"], average=True
+                    )
                     seqid_t_t_half, std_seqid_t_t_half = seqid_t_t_half / L, std_seqid_t_t_half / L
-        
+
                     # Store the results
                     results["seqid_t"].append(seqid_t.item())
                     results["std_seqid_t"].append(std_seqid_t.item())
                     results["seqid_t_t_half"].append(seqid_t_t_half.item())
                     results["std_seqid_t_t_half"].append(std_seqid_t_t_half.item())
                     results["t_half"].append(i // 2)
-    
+
                     # Check if they have crossed
-                    if torch.abs(seqid_t - seqid_t_t_half) / torch.sqrt(std_seqid_t**2 + std_seqid_t_t_half**2) < 0.1:
+                    if (
+                        torch.abs(seqid_t - seqid_t_t_half)
+                        / torch.sqrt(std_seqid_t**2 + std_seqid_t_t_half**2)
+                        < 0.1
+                    ):
                         break
 
             if i == niter:
@@ -450,10 +473,9 @@ class annaRBMcat(annaRBM):
 
         if show_progress:
             pbar.close()
-    
+
         return results
-    
-    
+
     def get_pattern(self, label_idx: int) -> torch.Tensor:
         """Returns the visible pattern associated to the given label index.
 
@@ -464,10 +486,9 @@ class annaRBMcat(annaRBM):
             torch.Tensor: Visible pattern of dimension (num_visibles, num_states) associated to the label.
         """
         mag_prototype = self.params["label_matrix"][label_idx]
-        pattern = (self.params["weight_matrix"] @ mag_prototype)
-        
-        return pattern
+        pattern = self.params["weight_matrix"] @ mag_prototype
 
+        return pattern
 
     def update_weights_AIS(
         self,
@@ -488,8 +509,7 @@ class annaRBMcat(annaRBM):
         if prev_model.params is None:
             raise ValueError("Previous model parameters are not initialized.")
         return _update_weights_AIS(prev_model.params, self.params, chains, log_weights)
-    
-    
+
     def compute_log_likelihood(
         self,
         visible: torch.Tensor,
@@ -508,23 +528,22 @@ class annaRBMcat(annaRBM):
             float: Log-likelihood of the model on the given configuration.
         """
         return _compute_log_likelihood(visible, weight, self.params, logZ)
-    
-    
+
     def init_chains(
         self,
         num_samples: int,
         use_profile: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Initialize the Markov chains for the RBM by sampling a uniform distribution on the visible layer and the labels
-    and sampling the hidden layer according to the visible one. If use_profile is True, the visible units and the label
-    are sampled from the profile model using the local fields.
+        and sampling the hidden layer according to the visible one. If use_profile is True, the visible units and the label
+        are sampled from the profile model using the local fields.
 
-        Args:
-            num_samples (int): Number of parallel chains.
-            use_profile (bool, optional): Whether to use the profile model. Defaults to False.
-    
-        Returns:
-            Dict[str, torch.Tensor]: Initial Markov chain.
+            Args:
+                num_samples (int): Number of parallel chains.
+                use_profile (bool, optional): Whether to use the profile model. Defaults to False.
+
+            Returns:
+                Dict[str, torch.Tensor]: Initial Markov chain.
         """
         chains = _init_chains(
             num_samples=num_samples,
@@ -533,8 +552,7 @@ class annaRBMcat(annaRBM):
             use_profile=use_profile,
         )
         return chains
-    
-    
+
     @staticmethod
     def save_chains(
         filename: str,
@@ -558,8 +576,7 @@ class annaRBMcat(annaRBM):
             label=label,
             alphabet=tokens,
         )
-        
-    
+
     def load_chains(
         self,
         filename: str,
@@ -581,7 +598,9 @@ class annaRBMcat(annaRBM):
         """
         tokens = get_tokens(alphabet)
         headers, visible = import_from_fasta(filename, tokens)
-        label = np.vectorize(lambda x: np.array([int(i) for i in x]), signature="() -> (l)")(headers)
+        label = np.vectorize(lambda x: np.array([int(i) for i in x]), signature="() -> (l)")(
+            headers
+        )
         label = torch.tensor(label, device=device, dtype=dtype)
         visible = one_hot(torch.tensor(visible), len(tokens)).to(device=device, dtype=dtype)
         if self.params is not None:
@@ -590,8 +609,7 @@ class annaRBMcat(annaRBM):
             hidden = torch.zeros((visible.shape[0],), device=device, dtype=dtype)
 
         return {"visible": visible, "hidden": hidden, "label": label}
-    
-    
+
     def compute_gradient(
         self,
         data: Dict[str, torch.Tensor],
@@ -623,13 +641,11 @@ class annaRBMcat(annaRBM):
             lambda_l2=lambda_l2,
             eta=eta,
         )
-        
-    
+
     def zerosum_gauge(self) -> None:
         """Applies the zero-sum gauge to the weight matrix of the model."""
         self.params["weight_matrix"] -= self.params["weight_matrix"].mean(1, keepdim=True)
-        
-    
+
     def init_parameters(
         self,
         num_visibles: int,
@@ -672,9 +688,9 @@ class annaRBMcat(annaRBM):
             frequencies_labels=frequencies_labels,
             std_init=std_init,
             device=self.device,
-            dtype=self.dtype)
-        
-    
+            dtype=self.dtype,
+        )
+
     def num_visibles(self) -> int:
         """Returns the number of visible units.
 
@@ -682,8 +698,7 @@ class annaRBMcat(annaRBM):
             int: Number of visible units.
         """
         return super().num_visibles()
-    
-    
+
     def num_hiddens(self) -> int:
         """Returns the number of hidden units.
 
@@ -691,8 +706,7 @@ class annaRBMcat(annaRBM):
             int: Number of hidden units.
         """
         return super().num_hiddens()
-    
-    
+
     def num_classes(self) -> int:
         """Returns the number of label classes.
 
@@ -700,8 +714,7 @@ class annaRBMcat(annaRBM):
             int: Number of label classes.
         """
         return super().num_classes()
-    
-    
+
     def num_states(self) -> int:
         """Returns the number of states of the categorical variables.
 
@@ -709,8 +722,7 @@ class annaRBMcat(annaRBM):
             int: Number of states of the visible units.
         """
         return self.params["vbias"].shape[1]
-    
-    
+
     def logZ0(self) -> float:
         """Computes the initial log partition function for the annaRBM.
 
@@ -721,4 +733,3 @@ class annaRBMcat(annaRBM):
         logZ_labels = torch.log(1.0 + torch.exp(self.params["lbias"])).sum().item()
         logZ_hiddens = torch.log(1.0 + torch.exp(self.params["hbias"])).sum().item()
         return logZ_visibles + logZ_labels + logZ_hiddens
-        

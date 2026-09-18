@@ -1,4 +1,5 @@
 from typing import Dict, Tuple
+
 import torch
 from adabmDCA.functional import one_hot
 
@@ -12,7 +13,8 @@ def _sample_hiddens(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
     mh = torch.sigmoid(
-        beta * (params["hbias"] + (visible @ params["weight_matrix"]) + (label @ params["label_matrix"]))
+        beta
+        * (params["hbias"] + (visible @ params["weight_matrix"]) + (label @ params["label_matrix"]))
     )
     h = torch.bernoulli(mh)
     return (h, mh)
@@ -25,9 +27,7 @@ def _sample_visibles(
     beta: float = 1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
 
-    mv = torch.sigmoid(
-        beta * (params["vbias"] + (hidden @ params["weight_matrix"].T))
-    )
+    mv = torch.sigmoid(beta * (params["vbias"] + (hidden @ params["weight_matrix"].T)))
     v = torch.bernoulli(mv)
     return (v, mv)
 
@@ -43,54 +43,32 @@ def _sample_labels(
         beta * (params["lbias"] + (hidden @ params["label_matrix"].T)),
         dim=-1,
     )
-    l = one_hot(torch.multinomial(ml, 1), num_classes=ml.shape[-1]).to(params["weight_matrix"].dtype).view(-1, ml.shape[-1])
-    
+    l = (
+        one_hot(torch.multinomial(ml, 1), num_classes=ml.shape[-1])
+        .to(params["weight_matrix"].dtype)
+        .view(-1, ml.shape[-1])
+    )
+
     return (l, ml)
 
 
-def _sample(
-    gibbs_steps: int,
-    visible: torch.Tensor,
-    label: torch.Tensor,
-    params: Dict[str, torch.Tensor],
-    beta: float = 1.0,
-    **kwargs,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-
-    hidden = torch.zeros((visible.shape[0], params["hbias"].shape[0]), device=visible.device, dtype=visible.dtype)
-    hidden_mag = torch.zeros_like(hidden)
-    visible_mag = torch.zeros_like(visible)
-    for _ in range(gibbs_steps):
-        hidden, hidden_mag = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        label, label_mag = _sample_labels(hidden=hidden, params=params, beta=beta)
-        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
-
-    return (visible, hidden, label, visible_mag, hidden_mag, label_mag)
+def _sample(gibbs_steps, visible, label, params, beta=1.0, **kwargs):
+    from annadca.rbm.sampling import sample
+    return sample(gibbs_steps, visible, label, params, beta,
+                  backend=kwargs.get("backend", "torch"))
 
 
-def _sample_conditioned(
-    gibbs_steps: int,
-    visible: torch.Tensor,
-    label: torch.Tensor,
-    params: Dict[str, torch.Tensor],
-    beta: float = 1.0,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-
-    hidden = torch.zeros((visible.shape[0], params["hbias"].shape[0]), device=visible.device, dtype=visible.dtype)
-    hidden_mag = torch.zeros_like(hidden)
-    visible_mag = torch.zeros_like(visible)
-    for _ in range(gibbs_steps):
-        hidden, hidden_mag = _sample_hiddens(visible=visible, label=label, params=params, beta=beta)
-        visible, visible_mag = _sample_visibles(hidden=hidden, params=params, beta=beta)
-
-    return (visible, hidden, visible_mag, hidden_mag)
+def _sample_conditioned(gibbs_steps, visible, label, params, beta=1.0, *, backend="torch"):
+    from annadca.rbm.sampling import sample
+    return sample(gibbs_steps, visible, label, params, beta,
+                  conditioned=True, backend=backend)
 
 
 @torch.jit.script
 def _predict_labels(
     visible: torch.Tensor,
     params: Dict[str, torch.Tensor],
-    beta: float = 1.0,    
+    beta: float = 1.0,
 ) -> torch.Tensor:
     """Returns the probability of each label given the visible units: p(l|v).
 
@@ -106,12 +84,14 @@ def _predict_labels(
         visible = visible.unsqueeze(0)
     num_hiddens = params["hbias"].shape[0]
     num_labels = params["lbias"].shape[0]
-    
+
     exponent = (
-        params["hbias"].view(1, 1, num_hiddens) +
-        (visible @ params["weight_matrix"]).view(-1, 1, num_hiddens) +
-        params["label_matrix"].view(1, num_labels, num_hiddens)
+        params["hbias"].view(1, 1, num_hiddens)
+        + (visible @ params["weight_matrix"]).view(-1, 1, num_hiddens)
+        + params["label_matrix"].view(1, num_labels, num_hiddens)
     )
-    logits = params["lbias"] + torch.where(exponent > 10, exponent, torch.log1p(torch.exp(exponent))).sum(-1) # (num_samples, num_labels)
-    
+    logits = params["lbias"] + torch.where(
+        exponent > 10, exponent, torch.log1p(torch.exp(exponent))
+    ).sum(-1)  # (num_samples, num_labels)
+
     return torch.softmax(beta * logits, dim=-1)

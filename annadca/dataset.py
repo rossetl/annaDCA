@@ -1,14 +1,14 @@
 from typing import Any
+
 import numpy as np
 import pandas as pd
-
-from torch.utils.data import Dataset
 import torch
+from adabmDCA.fasta import compute_weights, encode_sequence, get_tokens, import_from_fasta
 from torch.nn.functional import one_hot
-from adabmDCA.fasta import get_tokens, compute_weights, import_from_fasta, encode_sequence
+from torch.utils.data import Dataset
+
 
 class annaDataset(Dataset):
-    
     def __init__(
         self,
         path_data: str,
@@ -24,6 +24,7 @@ class annaDataset(Dataset):
         device: torch.device = torch.device("cpu"),
         dtype: torch.dtype = torch.float32,
     ):
+        path_data = str(path_data)
         self.device = device
         self.dtype = dtype
         self.data = pd.DataFrame()
@@ -48,7 +49,9 @@ class annaDataset(Dataset):
                     column_labels=column_labels,
                 )
             else:
-                raise ValueError("The annotations file must be provided if data are taken from a text file.")
+                raise ValueError(
+                    "The annotations file must be provided if data are taken from a text file."
+                )
         elif path_data.endswith(".csv"):
             self.parse_csv(
                 path_ann=path_data,
@@ -63,7 +66,9 @@ class annaDataset(Dataset):
                 if first_line.startswith(">"):
                     self.parse_fasta(path_data)
                 else:
-                    raise ValueError("Input data not recognized as a text file nor a .csv file. Invalid FASTA format.")
+                    raise ValueError(
+                        "Input data not recognized as a text file nor a .csv file. Invalid FASTA format."
+                    )
             if path_ann is not None:
                 self.parse_csv(
                     path_ann=path_ann,
@@ -72,25 +77,36 @@ class annaDataset(Dataset):
                     column_labels=column_labels,
                 )
             else:
-                raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
+                raise ValueError(
+                    "The annotations file must be provided if data are taken from a fasta file."
+                )
 
         if is_binary:
             self.tokens = "01"
         else:
             self.tokens = get_tokens(alphabet)
 
+        sequences = self.data[column_sequences]
+        if sequences.empty or sequences.isna().any():
+            raise ValueError("Sequences must be nonempty and cannot be missing.")
+        lengths = sequences.str.len()
+        if (lengths == 0).any() or lengths.nunique() != 1:
+            raise ValueError("Sequences must be nonempty and aligned to the same length.")
+        if self.data[column_labels].notna().sum() == 0:
+            raise ValueError("At least one annotated sequence is required.")
+
         # encode sequences
         self.data_one_hot = torch.tensor(
-                encode_sequence(list(self.data[column_sequences].values), self.tokens),
-                dtype=self.dtype,
-                device=self.device,
-            )
+            encode_sequence(list(self.data[column_sequences].values), self.tokens),
+            dtype=self.dtype,
+            device=self.device,
+        )
         # one-hot representation of sequences and labels
         self.parse_labels()
-        
+
         self.L = self.data_one_hot.shape[1]
         self.q = len(self.tokens)
-            
+
         if no_reweighting:
             self.weights = torch.ones(len(self.data), 1, dtype=dtype, device=device).view(-1, 1)
         else:
@@ -108,10 +124,19 @@ class annaDataset(Dataset):
                     device=device,
                     dtype=dtype,
                 ).view(-1, 1)
-                
+
+        if (
+            len(self.weights) != len(self.data)
+            or not torch.isfinite(self.weights).all()
+            or (self.weights < 0).any()
+            or self.weights.sum() <= 0
+        ):
+            raise ValueError(
+                "Weights must be finite, nonnegative, match the dataset, and have a positive sum."
+            )
+
         if not is_binary:
             self.data_one_hot = one_hot(self.data_one_hot.long(), num_classes=self.q).to(self.dtype)
-
 
     def parse_labels(self):
         labels = self.data[self.column_labels]
@@ -128,8 +153,7 @@ class annaDataset(Dataset):
             dtype=self.dtype,
             device=self.device,
         )
-        
-        
+
     def parse_csv(
         self,
         path_ann: str,
@@ -137,14 +161,24 @@ class annaDataset(Dataset):
         column_sequences: str = "sequence",
         column_labels: str = "label",
     ):
-        
-        df = pd.read_csv(path_ann, na_values=[""])
-        assert column_names.lower() in df.columns, f"Column {column_names} not found in the labels file."
-        assert column_labels.lower() in df.columns, f"Column {column_labels} not found in the labels file."
-        
+
+        df = pd.read_csv(
+            path_ann,
+            dtype={column_names: str, column_sequences: str, column_labels: str},
+            keep_default_na=False,
+            na_values=[""],
+        )
+        required = [column_names, column_labels]
+        if len(self.data) == 0:
+            required.append(column_sequences)
+        for column in required:
+            if column not in df.columns:
+                raise ValueError(f"Column {column!r} not found in {path_ann}.")
+        if df[column_names].isna().any() or df[column_names].duplicated().any():
+            raise ValueError("Sequence identifiers must be present and unique.")
+
         # If all data comes from the csv file:
         if len(self.data) == 0:
-            assert column_sequences.lower() in df.columns, f"Column {column_sequences} not found in the labels file."
             self.data = df.filter(items=[column_names, column_sequences, column_labels])
         # Else, names and data have been already parsed from a fasta file:
         else:
@@ -154,42 +188,40 @@ class annaDataset(Dataset):
                 df.filter(items=[column_names, column_labels]),
                 on=column_names,
                 how="left",
+                validate="one_to_one",
             )
-        
-            
+
     def parse_fasta(
         self,
         path_data: str,
     ):
         names, sequences = import_from_fasta(path_data)
         self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": sequences}  
+            {self.column_names: names, self.column_sequences: sequences}
         )
-
 
     def parse_text(
         self,
         path_data: str,
     ):
-        data = torch.tensor(
-            np.loadtxt(path_data),
-            dtype=self.dtype,
-            device=self.device,
-        )
+        if not self.is_binary:
+            raise ValueError("Text datasets require is_binary=True (--is_binary).")
+        data = np.loadtxt(path_data, ndmin=2)
+        if not np.isin(data, [0, 1]).all():
+            raise ValueError("Binary data must contain only 0 and 1.")
         names = np.arange(len(data)).astype(str)
-        self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": data}  
-        )
-    
+        sequences = ["".join(str(int(value)) for value in row) for row in data]
+        self.data = pd.DataFrame({self.column_names: names, self.column_sequences: sequences})
+
     def to_label(
         self,
         labels: torch.Tensor | np.ndarray | list,
     ) -> np.ndarray:
         """Converts the one-hot encoded labels (or their probability) to the original labels.
-        
+
         Args:
             labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their probability.
-            
+
         Returns:
             torch.Tensor: Original labels.
         """
@@ -199,19 +231,18 @@ class annaDataset(Dataset):
             labels = np.array(labels)
         if len(labels.shape) == 1:
             labels = np.expand_dims(labels, axis=0)
-            
+
         return np.array([self.idx_to_label[np.argmax(l).item()] for l in labels])
-    
-    
+
     def to_one_hot(
         self,
         labels: torch.Tensor | np.ndarray | list,
     ) -> torch.Tensor:
         """Converts the original labels to one-hot encoded labels.
-        
+
         Args:
             labels (torch.Tensor | np.ndarray | list): Original labels.
-            
+
         Returns:
             torch.Tensor: One-hot encoded labels.
         """
@@ -219,17 +250,15 @@ class annaDataset(Dataset):
             labels = labels.cpu().numpy().tolist()
         elif isinstance(labels, np.ndarray):
             labels = labels.tolist()
-        
+
         one_hot_labels = np.zeros((len(labels), len(self.idx_to_label)), dtype=np.float32)
         for i, label in enumerate(labels):
             if label in self.label_to_idx:
                 one_hot_labels[i, self.label_to_idx[label]] = 1.0
         return torch.tensor(one_hot_labels, dtype=self.dtype, device=self.device)
 
-
     def __len__(self):
         return len(self.data)
-
 
     def __getitem__(self, idx: int) -> Any:
         return {
@@ -237,8 +266,7 @@ class annaDataset(Dataset):
             "label": self.labels_one_hot[idx],
             "weight": self.weights[idx],
         }
-    
-    
+
     def get_num_residues(self) -> int:
         """Returns the number of residues (L) in the multi-sequence alignment.
 
@@ -246,8 +274,7 @@ class annaDataset(Dataset):
             int: Length of the MSA.
         """
         return self.L
-    
-    
+
     def get_num_states(self) -> int:
         """Returns the number of states (q) in the alphabet.
 
@@ -255,8 +282,7 @@ class annaDataset(Dataset):
             int: Number of states.
         """
         return self.q
-    
-    
+
     def get_num_classes(self) -> int:
         """Returns the number of categories in the labels.
 
@@ -264,20 +290,17 @@ class annaDataset(Dataset):
             int: Number of categories.
         """
         return self.labels_one_hot.shape[1]
-    
-    
-    def get_effective_size(self) -> int:
+
+    def get_effective_size(self) -> float:
         """Returns the effective size (Meff) of the dataset.
 
         Returns:
             int: Effective size of the dataset.
         """
-        return int(self.weights.sum())
-    
-    
+        return float(self.weights.sum())
+
     def shuffle(self) -> None:
-        """Shuffles the dataset.
-        """
+        """Shuffles the dataset."""
         perm = torch.randperm(len(self.data))
         # shuffle the data, one-hot encoded sequences, names, weights, and labels
         self.data = self.data.iloc[perm.numpy()].reset_index(drop=True)

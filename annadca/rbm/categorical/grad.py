@@ -1,8 +1,13 @@
 from typing import Dict
-import torch
 
-from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat # for categorical data
-from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin # for binary data
+import torch
+from adabmDCA.stats import (
+    get_freq_single_point as get_freq_single_point_cat,  # for categorical data
+)
+
+from annadca.rbm.binary.stats import (
+    get_freq_single_point as get_freq_single_point_bin,  # for binary data
+)
 
 
 @torch.jit.script
@@ -31,15 +36,21 @@ def _compute_gradient(
     # Normalize the weights
     data["weight"] = data["weight"] / data["weight"].sum()
     nchains = len(chains["visible"])
-    
+
     # Averages over data and generated samples
-    v_data_mean = get_freq_single_point_cat(data["visible"], weights=data["weight"], pseudo_count=pseudo_count)
-    h_data_mean = get_freq_single_point_bin(data["hidden"], weights=data["weight"], pseudo_count=pseudo_count)
-    l_data_mean = get_freq_single_point_bin(data["label"], weights=data["weight"], pseudo_count=pseudo_count)
+    v_data_mean = get_freq_single_point_cat(
+        data["visible"], weights=data["weight"], pseudo_count=pseudo_count
+    )
+    h_data_mean = get_freq_single_point_bin(
+        data["hidden"], weights=data["weight"], pseudo_count=pseudo_count
+    )
+    l_data_mean = get_freq_single_point_bin(
+        data["label"], weights=data["weight"], pseudo_count=pseudo_count
+    )
     v_gen_mean = get_freq_single_point_cat(chains["visible"], weights=None, pseudo_count=0.0)
     h_gen_mean = chains["hidden"].mean(0)
     l_gen_mean = chains["label"].mean(0)
-    
+
     if centered:
         # Centered variables
         v_data_centered = data["visible"] - v_data_mean
@@ -48,41 +59,55 @@ def _compute_gradient(
         h_gen_centered = chains["hidden"] - h_data_mean
         l_data_centered = data["label"] - l_data_mean
         l_gen_centered = chains["label"] - l_data_mean
-        
+
         # Gradient
         grad_weight_matrix = (
-            torch.einsum("nlq, np -> lqp", v_data_centered * data["weight"].view(-1, 1, 1), h_data_centered) -
-            torch.einsum("nlq, np -> lqp", v_gen_centered, h_gen_centered) / nchains
+            torch.einsum(
+                "nlq, np -> lqp", v_data_centered * data["weight"].view(-1, 1, 1), h_data_centered
+            )
+            - torch.einsum("nlq, np -> lqp", v_gen_centered, h_gen_centered) / nchains
         )
-        grad_label_matrix = (
-            (l_data_centered * data["weight"]).T @ h_data_centered -
-            (l_gen_centered.T @ h_gen_centered) / nchains
-        )
+        grad_label_matrix = (l_data_centered * data["weight"]).T @ h_data_centered - (
+            l_gen_centered.T @ h_gen_centered
+        ) / nchains
+        # E[label * hidden] differs from E[label] * E[hidden] for missing labels.
+        if "label_hidden_correction" in data:
+            grad_label_matrix += data["label_hidden_correction"]
         grad_vbias = v_data_mean - v_gen_mean - (grad_weight_matrix @ h_data_mean)
-        grad_hbias = h_data_mean - h_gen_mean - torch.einsum("lq, lqp -> p", v_data_mean, grad_weight_matrix)
+        grad_hbias = (
+            h_data_mean - h_gen_mean - torch.einsum("lq, lqp -> p", v_data_mean, grad_weight_matrix)
+        )
         grad_lbias = l_data_mean - l_gen_mean - (grad_label_matrix @ h_data_mean)
-        
+
         # regularization
-        grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
-        #grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
-        
+        grad_weight_matrix -= (
+            lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
+        )
+        # grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
+
     else:
         # Gradient
         grad_weight_matrix = (
-            torch.einsum("nlq, np -> lqp", data["visible"] * data["weight"].view(-1, 1, 1), data["hidden"]) -
-            torch.einsum("nlq, np -> lqp", chains["visible"], chains["hidden"]) / nchains
+            torch.einsum(
+                "nlq, np -> lqp", data["visible"] * data["weight"].view(-1, 1, 1), data["hidden"]
+            )
+            - torch.einsum("nlq, np -> lqp", chains["visible"], chains["hidden"]) / nchains
         )
-        grad_label_matrix = (
-            (data["label"] * data["weight"]).T @ data["hidden"] -
-            (chains["label"].T @ chains["hidden"]) / nchains
-        )
+        grad_label_matrix = (data["label"] * data["weight"]).T @ data["hidden"] - (
+            chains["label"].T @ chains["hidden"]
+        ) / nchains
+        # E[label * hidden] differs from E[label] * E[hidden] for missing labels.
+        if "label_hidden_correction" in data:
+            grad_label_matrix += data["label_hidden_correction"]
         grad_vbias = v_data_mean - v_gen_mean
         grad_hbias = h_data_mean - h_gen_mean
         grad_lbias = l_data_mean - l_gen_mean
-        
+
         # regularization
-        grad_weight_matrix -= lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
-        #grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
+        grad_weight_matrix -= (
+            lambda_l1 * params["weight_matrix"].sign() + lambda_l2 * params["weight_matrix"]
+        )
+        # grad_label_matrix -= lambda_l1 * params["label_matrix"].sign() + lambda_l2 * params["label_matrix"]
 
     # Attach the gradients to the parameters
     params["weight_matrix"].grad.set_(grad_weight_matrix)
@@ -90,4 +115,3 @@ def _compute_gradient(
     params["vbias"].grad.set_(grad_vbias)
     params["hbias"].grad.set_(grad_hbias)
     params["lbias"].grad.set_(eta * grad_lbias)
-        

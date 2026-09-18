@@ -1,33 +1,23 @@
-import subprocess
-import sys
-import os
+"""Command-line entry point for training and conditioned sampling."""
 
-def main():
-    # Get the directory of the current script
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+import argparse
+from importlib.metadata import version
 
-    # Check if the first positional argument is provided
-    if len(sys.argv) < 2:
-        print("Error: No command provided. Use 'train'.")
-        sys.exit(1)
 
-    # Assign the first positional argument to a variable
-    COMMAND = sys.argv[1]
+def main(argv: list[str] | None = None) -> None:
+    """Dispatch a command, preserving argparse errors and process exit status."""
+    parser = argparse.ArgumentParser(description="Annotation Assisted Direct Coupling Analysis")
+    parser.add_argument("--version", action="version", version=version("annadca"))
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("train", "sample"):
+        subparsers.add_parser(command, add_help=False)
+    args, remaining = parser.parse_known_args(argv)
+    if args.command == "train":
+        from annadca.scripts.train import main as run
+    else:
+        from annadca.scripts.sample import main as run
+    run(remaining)
 
-    # Map the command to the corresponding script
-    match COMMAND:
-        case "train":
-            SCRIPT = "train.py"
-        case _:
-            print(f"Error: Invalid command '{COMMAND}'. Use 'train'.")
-            sys.exit(1)
-
-    # Run the corresponding Python script with the remaining optional arguments
-    REPO_SCRIPTS = os.path.join(SCRIPT_DIR, "scripts")
-    script_path = os.path.join(REPO_SCRIPTS, SCRIPT)
-    proc = subprocess.call(
-        [sys.executable, script_path] + sys.argv[2:],
-    )
 
 if __name__ == "__main__":
     main()

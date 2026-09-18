@@ -1,13 +1,31 @@
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.gridspec import GridSpec
 
 
-def _plot_hist(ax, data1, data2, color, dim, orientation='vertical'):    
-    ax.hist(data1[:, dim], bins=30, color=color, histtype='step', zorder=0, density=True, orientation=orientation, lw=1)
-    ax.hist(data2[:, dim], bins=30, color=color, histtype='bar', zorder=1, density=True, orientation=orientation, alpha=0.3)
-    ax.axis('off')
-    
+def _plot_hist(ax, data1, data2, color, dim, orientation="vertical"):
+    ax.hist(
+        data1[:, dim],
+        bins=30,
+        color=color,
+        histtype="step",
+        zorder=0,
+        density=True,
+        orientation=orientation,
+        lw=1,
+    )
+    ax.hist(
+        data2[:, dim],
+        bins=30,
+        color=color,
+        histtype="bar",
+        zorder=1,
+        density=True,
+        orientation=orientation,
+        alpha=0.3,
+    )
+    ax.axis("off")
+
 
 def plot_PCA(
     fig: plt.figure,
@@ -23,7 +41,7 @@ def plot_PCA(
 ) -> plt.figure:
     """Plot the scatter plot of data1 and data2 in the space defined by the (dim1, dim2) principal components.
     Also plots the histograms projected along the x and y axes.
-    
+
     Args:
         fig (plt.figure): Matplotlib figure.
         data1 (np.array): Data array.
@@ -41,59 +59,105 @@ def plot_PCA(
     ax_scatter = fig.add_subplot(gs[1:4, 0:3])
     ax_hist_x = fig.add_subplot(gs[0, 0:3])
     ax_hist_y = fig.add_subplot(gs[1:4, 3])
-    
+
     unique_labels = np.unique(labels1)
     for label in unique_labels:
         mask1 = labels1 == label
         mask2 = labels2 == label
-        ax_scatter.scatter(data1[mask1, dim1], data1[mask1, dim2], color=label_to_color[label], s=50, zorder=0, alpha=0.3, label=label)
+        ax_scatter.scatter(
+            data1[mask1, dim1],
+            data1[mask1, dim2],
+            color=label_to_color[label],
+            s=50,
+            zorder=0,
+            alpha=0.3,
+            label=label,
+        )
         if split_labels:
-            _plot_hist(ax_hist_x, data1[mask1], data2[mask2], color=label_to_color[label], dim=dim1, orientation='vertical')
-            _plot_hist(ax_hist_y,data1[mask1], data2[mask2], color=label_to_color[label], dim=dim2, orientation='horizontal')
-    
+            _plot_hist(
+                ax_hist_x,
+                data1[mask1],
+                data2[mask2],
+                color=label_to_color[label],
+                dim=dim1,
+                orientation="vertical",
+            )
+            _plot_hist(
+                ax_hist_y,
+                data1[mask1],
+                data2[mask2],
+                color=label_to_color[label],
+                dim=dim2,
+                orientation="horizontal",
+            )
+
     for label in unique_labels:
         mask = labels2 == label
-        ax_scatter.scatter(data2[mask, dim1], data2[mask, dim2], color=label_to_color[label], s=20, zorder=2, edgecolor='black', marker='o', alpha=1, linewidth=0.4)
-    
+        ax_scatter.scatter(
+            data2[mask, dim1],
+            data2[mask, dim2],
+            color=label_to_color[label],
+            s=20,
+            zorder=2,
+            edgecolor="black",
+            marker="o",
+            alpha=1,
+            linewidth=0.4,
+        )
+
     if not split_labels:
-        _plot_hist(ax_hist_x, data1, data2, 'red', dim1)
-        _plot_hist(ax_hist_y, data1, data2, 'red', dim2, orientation='horizontal')
-    
+        _plot_hist(ax_hist_x, data1, data2, "red", dim1)
+        _plot_hist(ax_hist_y, data1, data2, "red", dim2, orientation="horizontal")
+
     ax_scatter.set_xlabel(f"PC {dim1 + 1}")
     ax_scatter.set_ylabel(f"PC {dim2 + 1}")
-    
+
     fig.suptitle(title)
     return fig
 
 
 def plot_mixing_time(results: dict) -> plt.figure:
     """Plot the mixing time of the model.
-    
+
     Args:
         results (dict): Dictionary containing the results of the resampling.
-        
+
     Returns:
         plt.figure: Matplotlib figure.
     """
     fig, ax = plt.subplots(figsize=(6, 4), dpi=96)
     ax.plot(results["t_half"], results["seqid_t"], label=r"SeqID$(t)$", color="#002CFF")  # Blue
-    ax.fill_between(results["t_half"],
-                     np.array(results["seqid_t"]) - np.array(results["std_seqid_t"]),
-                     np.array(results["seqid_t"]) + np.array(results["std_seqid_t"]),
-                     color="#002CFF", alpha=0.2)
-    ax.plot(results["t_half"], results["seqid_t_t_half"], label=r"SeqID$(t, t/2)$", color="#67BAA6")  # Orange
-    ax.fill_between(results["t_half"],
-                     np.array(results["seqid_t_t_half"]) - np.array(results["std_seqid_t_t_half"]),
-                     np.array(results["seqid_t_t_half"]) + np.array(results["std_seqid_t_t_half"]),
-                     color="#67BAA6", alpha=0.2)
+    ax.fill_between(
+        results["t_half"],
+        np.array(results["seqid_t"]) - np.array(results["std_seqid_t"]),
+        np.array(results["seqid_t"]) + np.array(results["std_seqid_t"]),
+        color="#002CFF",
+        alpha=0.2,
+    )
+    ax.plot(
+        results["t_half"], results["seqid_t_t_half"], label=r"SeqID$(t, t/2)$", color="#67BAA6"
+    )  # Orange
+    ax.fill_between(
+        results["t_half"],
+        np.array(results["seqid_t_t_half"]) - np.array(results["std_seqid_t_t_half"]),
+        np.array(results["seqid_t_t_half"]) + np.array(results["std_seqid_t_t_half"]),
+        color="#67BAA6",
+        alpha=0.2,
+    )
     ax.set_xlabel(r"$t/2$ (Sweeps)")
     ax.set_ylabel("Sequence Identity")
-    ax.legend(loc='upper right')
+    ax.legend(loc="upper right")
     ax.set_title("Mixing time")
 
-
     # Add annotation for mixing time
-    ax.annotate(r"$t^{\mathrm{mix}}=$" + f"{results['t_half'][-1]}", xy=(0.96, 0.7), xycoords='axes fraction', fontsize=15,
-                 verticalalignment='top', horizontalalignment='right', bbox=dict(facecolor='white', alpha=0.5))
+    ax.annotate(
+        r"$t^{\mathrm{mix}}=$" + f"{results['t_half'][-1]}",
+        xy=(0.96, 0.7),
+        xycoords="axes fraction",
+        fontsize=15,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(facecolor="white", alpha=0.5),
+    )
 
     return fig

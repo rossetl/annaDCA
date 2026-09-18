@@ -1,12 +1,13 @@
-from typing import Optional, Dict
 from abc import ABC, abstractmethod
+from typing import Dict, Optional
+
 import numpy as np
 import torch
 
 from annadca.dataset import annaDataset
-from annadca.io import _save_model, _load_model
-        
-        
+from annadca.io import _load_model, _save_model
+
+
 class annaRBM(ABC):
     """Abstract class for the annotation-assisted Restricted Boltzmann Machine (annaRBM)"""
 
@@ -17,13 +18,12 @@ class annaRBM(ABC):
         dtype: Optional[torch.dtype] = torch.float32,
     ):
         if params is not None:
-            self.params = {k : params[k].to(device=device, dtype=dtype) for k in params.keys()}
+            self.params = {k: params[k].to(device=device, dtype=dtype) for k in params.keys()}
         else:
             self.params = None
 
         self.device = device
         self.dtype = dtype
-
 
     @torch.jit.export
     def to(
@@ -51,7 +51,6 @@ class annaRBM(ABC):
             self.dtype = dtype
         return self
 
-
     @torch.jit.export
     def clone(
         self,
@@ -71,14 +70,13 @@ class annaRBM(ABC):
             device = self.device
         if dtype is None:
             dtype = self.dtype
-            
+
         # Cannot instantiate abstract class annaRBM, so use type(self) to instantiate the concrete subclass
         return type(self)(
             params=self.params,
             device=device,
             dtype=dtype,
         )
-        
 
     def save(
         self,
@@ -98,8 +96,7 @@ class annaRBM(ABC):
             filename=filename,
             num_updates=num_updates,
         )
-    
-    
+
     def load(
         self,
         filename: str,
@@ -129,10 +126,9 @@ class annaRBM(ABC):
         )
         self.device = device
         self.dtype = dtype
-        
+
         return num_updates
-    
-    
+
     @abstractmethod
     def compute_energy(
         self,
@@ -150,8 +146,7 @@ class annaRBM(ABC):
             torch.Tensor: Energy of the data.
         """
         pass
-    
-    
+
     @abstractmethod
     def compute_energy_visibles(
         self,
@@ -167,8 +162,7 @@ class annaRBM(ABC):
             torch.Tensor: Energy of the visible units.
         """
         pass
-    
-    
+
     @abstractmethod
     def compute_energy_hiddens(
         self,
@@ -184,8 +178,7 @@ class annaRBM(ABC):
             torch.Tensor: Energy of the hidden units.
         """
         pass
-    
-    
+
     @abstractmethod
     def sample_hiddens(
         self,
@@ -205,8 +198,7 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Sampled hidden units and hidden magnetization.
         """
         pass
-    
-    
+
     @abstractmethod
     def sample_visibles(
         self,
@@ -226,8 +218,7 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Sampled visible units and visible magnetization.
         """
         pass
-        
-        
+
     @abstractmethod
     def sample_labels(
         self,
@@ -245,8 +236,7 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor] Sampled labels and label magnetization.
         """
         pass
-        
-        
+
     @abstractmethod
     def sample(
         self,
@@ -268,8 +258,7 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Sampled visible, hidden and label units.
         """
         pass
-    
-    
+
     @abstractmethod
     def sample_conditioned(
         self,
@@ -294,8 +283,7 @@ class annaRBM(ABC):
             torch.Tensor: Conditional probability distribution of the visible units.
         """
         pass
-        
-        
+
     def predict_labels(
         self,
         gibbs_steps: int,
@@ -319,7 +307,6 @@ class annaRBM(ABC):
         """
         pass
 
-
     @abstractmethod
     def update_weights_AIS(
         self,
@@ -338,8 +325,7 @@ class annaRBM(ABC):
             torch.Tensor: Log-weights at time t.
         """
         pass
-    
-    
+
     @abstractmethod
     def compute_log_likelihood(
         self,
@@ -360,7 +346,6 @@ class annaRBM(ABC):
         """
         pass
 
-
     @abstractmethod
     def init_chains(
         self,
@@ -375,7 +360,6 @@ class annaRBM(ABC):
             Dict[str, torch.Tensor]: Initialized chains.
         """
         pass
-    
 
     @staticmethod
     @abstractmethod
@@ -392,8 +376,7 @@ class annaRBM(ABC):
             label (torch.Tensor): Labels.
         """
         pass
-    
-    
+
     @abstractmethod
     def load_chains(
         self,
@@ -411,9 +394,8 @@ class annaRBM(ABC):
         Returns:
             Dict[str, torch.Tensor]: Visible and hidden units and labels of the chains.
         """
-        pass        
-        
-        
+        pass
+
     @abstractmethod
     def compute_gradient(
         self,
@@ -423,7 +405,7 @@ class annaRBM(ABC):
         centered: bool = True,
         lambda_l1: float = 0.0,
         lambda_l2: float = 0.0,
-        eta: float = 1.0
+        eta: float = 1.0,
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it.
 
@@ -437,7 +419,6 @@ class annaRBM(ABC):
             eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
         """
         pass
-        
 
     @abstractmethod
     def init_parameters(
@@ -461,8 +442,7 @@ class annaRBM(ABC):
             annaRBM: annaRBM instance.
         """
         pass
-        
-    
+
     @abstractmethod
     def num_visibles(self) -> int:
         """Returns the number of visible units.
@@ -473,8 +453,7 @@ class annaRBM(ABC):
         if self.params is None:
             raise ValueError("Model parameters are not initialized.")
         return self.params["vbias"].shape[0]
-        
-        
+
     @abstractmethod
     def num_hiddens(self) -> int:
         """Returns the number of hidden units.
@@ -485,8 +464,7 @@ class annaRBM(ABC):
         if self.params is None:
             raise ValueError("Model parameters are not initialized.")
         return self.params["hbias"].shape[0]
-        
-        
+
     @abstractmethod
     def num_classes(self) -> int:
         """Returns the number of labels.
@@ -497,8 +475,7 @@ class annaRBM(ABC):
         if self.params is None:
             raise ValueError("Model parameters are not initialized.")
         return self.params["lbias"].shape[0]
-        
-        
+
     @abstractmethod
     def logZ0(self) -> float:
         """Computes the initial log partition function for the annaRBM.
@@ -507,4 +484,3 @@ class annaRBM(ABC):
             float: Initial log partition function.
         """
         pass
-    

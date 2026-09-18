@@ -1,44 +1,57 @@
 import argparse
+import json
 import os
-import numpy as np
-from tqdm import tqdm
-from itertools import cycle
 import time
 import warnings
 
+import h5py
+import numpy as np
 import torch
-from torch.utils.data import DataLoader
-from torch.optim import SGD
-from adabmDCA.utils import get_device, get_dtype
 from adabmDCA.stats import get_freq_single_point as get_freq_single_point_cat
+from adabmDCA.utils import get_device, get_dtype
+from torch.optim import SGD
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-from annadca.parser import add_args_train
-from annadca.dataset import annaDataset
 from annadca import annaRBMbin, annaRBMcat
+from annadca.dataset import annaDataset
+from annadca.io import _load_model_from_ptt
+from annadca.parser import add_args_train
 from annadca.rbm.binary.stats import get_freq_single_point as get_freq_single_point_bin
 from annadca.train import pcd
-from annadca.utils import get_saved_updates
-from annadca.io import _load_model_from_ptt
 
 
 # import command-line input arguments
 def create_parser():
     # Important arguments
-    parser = argparse.ArgumentParser(description='Train an annaRBM model.')
-    parser = add_args_train(parser) 
-    
+    parser = argparse.ArgumentParser(description="Train an annaRBM model.")
+    parser = add_args_train(parser)
+
     return parser
 
 
-if __name__ == '__main__':
-    
+def main(argv: list[str] | None = None) -> None:
+
     # Load parser, training dataset and DCA model
     parser = create_parser()
-    args = parser.parse_args()
-    
-    print("\n" + "".join(["*"] * 10) + f" Training annaRBM model " + "".join(["*"] * 10) + "\n")
+    args = parser.parse_args(argv)
+    for name in ("hidden", "nchains", "nepochs", "gibbs_steps"):
+        if getattr(args, name) <= 0:
+            parser.error(f"--{name} must be positive")
+
+    print("\n" + "".join(["*"] * 10) + " Training annaRBM model " + "".join(["*"] * 10) + "\n")
     device = get_device(args.device)
     dtype = get_dtype(args.dtype)
+    backend = "triton" if args.triton else "torch"
+    if args.triton:
+        if device.type != "cuda" or dtype != torch.float32:
+            parser.error("Triton training requires float32 CUDA; use --no-triton for this device/dtype")
+        if not torch.cuda.is_available():
+            parser.error("Triton training requires an available CUDA device; use --no-triton --device cpu")
+        try:
+            from annadca.rbm import triton_sampling  # noqa: F401
+        except ImportError:
+            parser.error("Triton is not installed; install annadca[triton] or use --no-triton")
     template = "{0:<30} {1:<50}"
     print(template.format("Input MSA:", str(args.data)))
     print(template.format("Input annotations:", str(args.annotations)))
@@ -48,6 +61,7 @@ if __name__ == '__main__':
     print(template.format("Minibatch size:", args.nchains))
     print(template.format("Number of chains:", args.nchains))
     print(template.format("Number of Gibbs steps:", args.gibbs_steps))
+    print(template.format("Sampling backend:", backend))
     print(template.format("Number of epochs:", args.nepochs))
     print(template.format("Centered gradient:", not args.uncentered))
     print(template.format("L1 regularization:", args.l1))
@@ -61,7 +75,13 @@ if __name__ == '__main__':
     print("\n")
 
     # Check that input files exist
-    for path in [args.data, args.annotations, args.path_params, args.path_chains, args.path_params_ptt]:
+    for path in [
+        args.data,
+        args.annotations,
+        args.path_params,
+        args.path_chains,
+        args.path_params_ptt,
+    ]:
         if path is not None and not os.path.exists(path):
             raise FileNotFoundError(f"Input file {path} not found.")
 
@@ -81,36 +101,45 @@ if __name__ == '__main__':
         device=device,
         dtype=dtype,
     )
+    if args.path_params is not None:
+        with h5py.File(args.path_params, "r") as archive:
+            if "label_vocabulary" in archive.attrs and json.loads(
+                archive.attrs["label_vocabulary"]
+            ) != list(dataset.label_to_idx):
+                raise ValueError("Resuming requires the original training label vocabulary.")
+            if "alphabet" in archive.attrs and archive.attrs["alphabet"] != dataset.tokens:
+                raise ValueError("Resuming requires the original training alphabet.")
     tokens = dataset.tokens
     print(f"Alphabet: {dataset.tokens}")
     print(f"Dataset imported successfully: M={len(dataset)}, L={dataset.L}, q={dataset.q}.")
-    
+
     # Create the folder where to save the model
     folder = args.output
     os.makedirs(folder, exist_ok=True)
 
     if args.label is not None:
         file_paths = {
-            "log" : os.path.join(folder, f"{args.label}.log"),
-            "params" : os.path.join(folder, f"{args.label}_params.h5"),
-            "chains" : os.path.join(folder, f"{args.label}_chains.fasta")
+            "log": os.path.join(folder, f"{args.label}.log"),
+            "params": os.path.join(folder, f"{args.label}_params.h5"),
+            "chains": os.path.join(folder, f"{args.label}_chains.fasta"),
         }
-        
+
     else:
         file_paths = {
-            "log" : os.path.join(folder, f"annaRBM.log"),
-            "params" : os.path.join(folder, f"params.h5"),
-            "chains" : os.path.join(folder, f"chains.fasta")
+            "log": os.path.join(folder, "annaRBM.log"),
+            "params": os.path.join(folder, "params.h5"),
+            "chains": os.path.join(folder, "chains.fasta"),
         }
-        
+
     # Check if the files in file_paths already exist. If so, delete them
     if args.path_params is None and args.path_params_ptt is None:
         for path in file_paths.values():
             if os.path.exists(path):
                 # Ask for confirmation before deleting
                 confirm = input(f"File {path} already exists. Do you want to delete it? (y/n): ")
-                if confirm.lower() == "y":
-                    os.remove(path)
+                if confirm.lower() != "y":
+                    raise FileExistsError(f"Refusing to overwrite {path}")
+                os.remove(path)
 
     # Save the weights if not already provided
     if args.weights is None and not args.no_reweighting:
@@ -122,17 +151,17 @@ if __name__ == '__main__':
         print(f"Weights saved in {path_weights}")
     elif args.no_reweighting:
         print("All sequence weights set to 1.0")
-        
+
     # Set the random seed
     torch.manual_seed(args.seed)
-        
+
     # Shuffle the dataset
     dataset.shuffle()
-    
+
     if args.pseudocount is None:
-        args.pseudocount = 1. / dataset.get_effective_size()
+        args.pseudocount = 1.0 / dataset.get_effective_size()
         print(f"Pseudocount automatically set to {args.pseudocount}.")
-        
+
     # Initialize the model and the chains
     num_visibles = dataset.get_num_residues()
     num_hiddens = args.hidden
@@ -162,14 +191,18 @@ if __name__ == '__main__':
 
     if args.path_params_ptt is not None:
         if args.path_params is not None or args.path_chains is not None:
-            raise ValueError("Use either --path_params_ptt or --path_params/--path_chains, not both.")
+            raise ValueError(
+                "Use either --path_params_ptt or --path_params/--path_chains, not both."
+            )
         upd, params, chains = _load_model_from_ptt(
             filename=args.path_params_ptt,
             index=None,
             device=device,
             dtype=dtype,
             num_labels=num_labels,
-            label_frequencies=frequency_labels.squeeze(0) if frequency_labels.ndim > 1 else frequency_labels,
+            label_frequencies=frequency_labels.squeeze(0)
+            if frequency_labels.ndim > 1
+            else frequency_labels,
         )
         rbm.params = params
         rbm.device = device
@@ -190,11 +223,13 @@ if __name__ == '__main__':
             ).to(device=device, dtype=dtype)
 
         if "hidden" not in chains:
-            chains.update(rbm.sample_hiddens(
-                visible=chains["visible"],
-                label=chains["label"],
-                beta=1.0,
-            ))
+            chains.update(
+                rbm.sample_hiddens(
+                    visible=chains["visible"],
+                    label=chains["label"],
+                    beta=1.0,
+                )
+            )
 
         args.nchains = len(chains["visible"])
         print(f"Model parameters and chains at update {upd} loaded from", args.path_params_ptt)
@@ -213,7 +248,7 @@ if __name__ == '__main__':
         else:
             init_frequences_visible = None
             init_frequences_labels = None
-            
+
         rbm.init_parameters(
             num_visibles=num_visibles,
             num_hiddens=num_hiddens,
@@ -226,7 +261,7 @@ if __name__ == '__main__':
             dtype=dtype,
         )
         upd = 0
-    
+
     if args.path_chains is not None:
         chains = rbm.load_chains(
             filename=args.path_chains,
@@ -238,24 +273,27 @@ if __name__ == '__main__':
     elif args.path_params_ptt is None:
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
-            warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
+            warnings.warn(
+                "The number of chains is larger than the dataset size. The number of chains is set to the dataset size."
+            )
         chains = rbm.init_chains(num_samples=args.nchains, use_profile=True)
-        
+
     print("\n")
     # Save the hyperparameters of the model
-    template = "{0:<20} {1:<10}\n"  
+    template = "{0:<20} {1:<10}\n"
     with open(file_paths["log"], "w") as f:
         if args.label is not None:
             f.write(template.format("label:", args.label))
         else:
             f.write(template.format("label:", "N/A"))
-            
+
         f.write(template.format("input data:", str(args.data)))
         f.write(template.format("alphabet:", dataset.tokens))
         f.write(template.format("# hiddens:", args.hidden))
         f.write(template.format("nchains:", args.nchains))
         f.write(template.format("minibatch size:", args.nchains))
         f.write(template.format("gibbs steps:", args.gibbs_steps))
+        f.write(template.format("sampling backend:", backend))
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
         f.write(template.format("centered:", not args.uncentered))
@@ -263,18 +301,19 @@ if __name__ == '__main__':
         f.write(template.format("l1 strength:", args.l1))
         f.write(template.format("l2 strength:", args.l2))
         f.write(template.format("eta:", args.eta))
+        f.write(template.format("marginalize missing labels:", args.marginalize_missing_labels))
         f.write(template.format("random seed:", args.seed))
         f.write("\n")
         template = "{0:<10} {1:<10}\n"
         f.write(template.format("Epoch", "Time [s]"))
-        
+
     # Initialize gradients for the parameters
     for key, value in rbm.params.items():
         value.grad = torch.zeros_like(value)
 
     # Select the optimizer
     optimizer = SGD(rbm.params.values(), lr=args.lr, maximize=True)
-    
+
     # Initialize the dataloader
     dataloader = DataLoader(
         dataset,
@@ -282,20 +321,14 @@ if __name__ == '__main__':
         shuffle=True,
         drop_last=True,
     )
-    
+
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
-    dataloader = cycle(dataloader)
-    
-    # Initialize the variables for the log-likelihood estimation
-    logZ = rbm.logZ0()
-    log_weights = torch.zeros(args.nchains, device=device, dtype=dtype)
-    log_likelihood = rbm.compute_log_likelihood(
-        visible=data,
-        label=dataset.labels_one_hot,
-        weight=dataset.weights,
-        logZ=logZ,
-    )
-    
+    def batches():
+        while True:
+            yield from dataloader
+
+    batch_iterator = batches()
+
     # Train the model
     start = time.time()
     pbar = tqdm(initial=upd, total=args.nepochs, colour="red", dynamic_ncols=True, ascii="-#")
@@ -308,7 +341,7 @@ if __name__ == '__main__':
                 pbar.update(10)
 
             # Get the next batch
-            batch = next(dataloader)
+            batch = next(batch_iterator)
             optimizer.zero_grad(set_to_none=False)
             chains = pcd(
                 rbm=rbm,
@@ -320,11 +353,13 @@ if __name__ == '__main__':
                 lambda_l1=args.l1,
                 lambda_l2=args.l2,
                 eta=args.eta,
+                marginalize_labels=args.marginalize_missing_labels,
+                backend=backend,
             )
 
             # Update the parameters
             optimizer.step()
-            
+
             # Set the gauge of the weights
             rbm.zerosum_gauge()
 
@@ -342,23 +377,22 @@ if __name__ == '__main__':
                 with open(file_paths["log"], "a") as f:
                     f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
         pbar.close()
-        
-        # Save the final model and chains if upd is not present in the h5 archive
-        # Check that the parameters file exists. If not, print a warning and skip the saving.
-        if not os.path.exists(file_paths["params"]):
-            warnings.warn(f"Parameters file {file_paths['params']} not found. Maybe --nepochs is smaller than the number of updates of the loaded model. Please set --nepochs to a value larger than {upd}.")
-        else:
-            saved_updates = get_saved_updates(file_paths["params"])
-            if upd not in saved_updates:
-                rbm.save(
-                    filename=file_paths["params"],
-                    num_updates=upd,
-                )
-                rbm.save_chains(
-                    filename=file_paths["chains"],
-                    visible=chains["visible"],
-                    label=chains["label"],
-                    alphabet=dataset.tokens,
-                )
-                with open(file_paths["log"], "a") as f:
-                    f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
+
+        # Always leave a usable final checkpoint, including resumed runs in a new folder.
+        rbm.save(filename=file_paths["params"], num_updates=upd)
+        rbm.save_chains(
+            filename=file_paths["chains"],
+            visible=chains["visible"],
+            label=chains["label"],
+            alphabet=dataset.tokens,
+        )
+        with open(file_paths["log"], "a") as f:
+            f.write(template.format(f"{upd}", f"{time.time() - start:.2f}"))
+
+    with h5py.File(file_paths["params"], "a") as archive:
+        archive.attrs["label_vocabulary"] = json.dumps(list(dataset.label_to_idx))
+        archive.attrs["alphabet"] = dataset.tokens
+
+
+if __name__ == "__main__":
+    main()

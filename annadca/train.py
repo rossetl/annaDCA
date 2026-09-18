@@ -1,7 +1,9 @@
 from typing import Dict
+
 import torch
 
 from annadca.classes import annaRBM
+from annadca.rbm.missing_labels import marginalize_missing_labels
 
 
 def pcd(
@@ -14,6 +16,8 @@ def pcd(
     lambda_l1: float = 0.0,
     lambda_l2: float = 0.0,
     eta: float = 1.0,
+    marginalize_labels: bool = False,
+    backend: str = "torch",
 ) -> Dict[str, torch.Tensor]:
     """Computes the gradient of the parameters of the model and the Markov chains using the Persistent Contrastive Divergence algorithm.
 
@@ -27,12 +31,17 @@ def pcd(
         lambda_l1 (float, optional): L1 regularization weight. Defaults to 0.0.
         lambda_l2 (float, optional): L2 regularization weight. Defaults to 0.0.
         eta (float, optional): Relative contribution of the label term. Defaults to 1.0.
+        marginalize_labels (bool): Exactly marginalize missing labels in the positive phase.
+        backend (str): Sampling backend (torch or triton). Defaults to torch.
 
     Returns:
         Dict[str, torch.Tensor]: Updated chains.
     """
     # Compute the hidden magnetization of the data
-    data_batch["hidden"] = rbm.sample_hiddens(**data_batch, beta=1.0)["hidden_mag"]
+    if marginalize_labels:
+        data_batch = marginalize_missing_labels(data_batch, rbm.params)
+    else:
+        data_batch["hidden"] = rbm.sample_hiddens(**data_batch, beta=1.0, backend=backend)["hidden_mag"]
 
     # Compute the gradient of the Log-Likelihood
     rbm.compute_gradient(
@@ -44,8 +53,8 @@ def pcd(
         lambda_l2=lambda_l2,
         eta=eta,
     )
-    
+
     # Update the persistent chains
-    chains = rbm.sample(gibbs_steps=gibbs_steps, **chains, beta=1.0)
+    chains = rbm.sample(gibbs_steps=gibbs_steps, **chains, beta=1.0, backend=backend)
 
     return chains
