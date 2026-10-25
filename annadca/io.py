@@ -1,7 +1,7 @@
 from typing import Dict, Optional
 import torch
 from torch.nn.functional import one_hot
-from adabmDCA.fasta import encode_sequence
+from annadca.utils.sequences import encode_sequence
 from annadca.utils.fasta import read_fasta, write_fasta
 
 
@@ -10,6 +10,7 @@ def save_chains(
     chains: Dict[str, torch.Tensor],
     tokens: str,
     idx_to_label: Optional[dict] = None,
+    continuous_labels: bool = False,
 ):
     """Saves the visible and label configurations of the chains to a fasta file.
     The header of each sequence has the form 'chain_<i>|label=<label>'.
@@ -21,12 +22,13 @@ def save_chains(
         tokens (str): Alphabet used to encode the sequences ('01' for binary variables).
         idx_to_label (dict, optional): Map from the label index to the label name. If None, the label index is saved.
             Ignored for continuous labels.
+        continuous_labels (bool, optional): Whether the labels are continuous. Defaults to False.
     """
     visible, label = chains["visible"], chains["label"]
     if visible.dim() == 3:
         visible = visible.argmax(dim=-1)
     visible = visible.long().cpu().numpy()
-    if label.shape[-1] == 1 and not torch.all((label == 0) | (label == 1)):
+    if continuous_labels:
         label_values = [f"{x:.6g}" for x in label.view(-1).tolist()]
     else:
         # all-zero vectors (missing labels) are saved as 'None'

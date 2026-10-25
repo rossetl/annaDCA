@@ -8,13 +8,14 @@ class CategoricalLabelLayer(PottsLayer):
     """Label layer for categorical annotations: a single categorical variable with `num_classes` states,
     in one-hot encoding. An all-zero vector represents a missing label.
     """
+    layer_type = "categorical"
+
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
-        **kwargs
     ):
         # Skip the PottsLayer shape check: the label is a single categorical variable of shape (num_classes,)
-        Layer.__init__(self, shape=shape, **kwargs)
+        Layer.__init__(self, shape=shape)
         assert len(self.shape) == 1, f"Label layer shape must be one-dimensional, got {self.shape}."
 
 
@@ -23,14 +24,14 @@ class LabelNullLayer(Layer):
     """Dummy layer for labels. Providing this label is like training a simple RBM with no label conditioning:
     the label units are always zero and do not contribute to the energy.
     """
+    layer_type = "null"
     can_be_hidden = False
 
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
-        **kwargs
     ):
-        super().__init__(shape=shape, **kwargs)
+        super().__init__(shape=shape)
         assert len(self.shape) == 1, f"LabelNull layer shape must be one-dimensional, got {self.shape}."
 
 
@@ -53,7 +54,7 @@ class LabelNullLayer(Layer):
         return torch.zeros((num_samples,) + self.shape, device=self.bias.device, dtype=self.bias.dtype)
 
 
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         return torch.zeros_like(I)
 
 

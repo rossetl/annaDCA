@@ -9,14 +9,14 @@ class PottsLayer(Layer):
     """Layer of categorical units in one-hot encoding. The last dimension of the shape is the number of states,
     e.g. (L, q) for L Potts variables with q states each. The potential is U(x) = - sum_a bias_a * x_a.
     """
+    layer_type = "potts"
     can_be_hidden = False
 
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
-        **kwargs
     ):
-        super().__init__(shape=shape, **kwargs)
+        super().__init__(shape=shape)
         assert len(self.shape) == 2, f"Potts layer shape must be two-dimensional (L, q), got {self.shape}."
 
 
@@ -73,7 +73,7 @@ class PottsLayer(Layer):
         return self._sample_from_probs(p.expand((num_samples,) + self.shape))
 
 
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         p = torch.softmax(beta * (I + self.bias), dim=-1)
         return self._sample_from_probs(p)
 
@@ -91,6 +91,24 @@ class PottsLayer(Layer):
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
         return - (x * self.bias).reshape(len(x), -1).sum(dim=1)
+
+
+    def uniform_mean(self) -> torch.Tensor:
+        return torch.full_like(self.bias, 1.0 / self.num_states)
+
+
+    def compress(self, x: torch.Tensor) -> torch.Tensor:
+        """Index of the active state of each variable, -1 for the all-zero vectors (e.g. missing labels)."""
+        indices = x.argmax(dim=-1).to(torch.int16)
+        indices[x.sum(dim=-1) == 0] = -1
+        return indices
+
+
+    def decompress(self, x: torch.Tensor) -> torch.Tensor:
+        if x.is_floating_point() and x.shape[1:] == self.shape:
+            return x.to(self.bias)
+        x = x.long()
+        return (one_hot(x.clamp_min(0), num_classes=self.num_states) * (x >= 0).unsqueeze(-1)).to(self.bias)
 
 
     def data_meanvar(

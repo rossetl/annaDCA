@@ -18,7 +18,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "adabmDCA>=0.7.0",
     "numpy>=1.24",
     "pandas>=2.0",
     "torch>=2.1",

@@ -13,16 +13,21 @@ class GaussianLayer(Layer):
         shape: Shape of the layer.
         learn_scale (bool, optional): Whether the scale (precision) of the units is learned. Defaults to True.
     """
+    layer_type = "gaussian"
+
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
         learn_scale: bool = True,
-        **kwargs
     ):
-        super().__init__(shape=shape, **kwargs)
+        super().__init__(shape=shape)
         assert len(self.shape) == 1, f"{self.__class__.__name__} shape must be one-dimensional, got {self.shape}."
         self.scale = Parameter(torch.ones(self.shape), requires_grad=False)
         self.learn_scale = learn_scale
+
+
+    def config(self) -> dict:
+        return {**super().config(), "learn_scale": self.learn_scale}
 
 
     def _abs_scale(self) -> torch.Tensor:
@@ -65,7 +70,7 @@ class GaussianLayer(Layer):
         return torch.normal(mean.expand((num_samples,) + self.shape), std.expand((num_samples,) + self.shape))
 
 
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         abs_scale = self._abs_scale()
         mu = (I + self.bias) / abs_scale
         sigma = torch.sqrt(1.0 / (beta * abs_scale))

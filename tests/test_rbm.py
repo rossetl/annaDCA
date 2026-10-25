@@ -281,3 +281,58 @@ def test_missing_labels_zero_option():
     rbm.apply_gradient(data, chains, standardize=False, centered=False, missing_labels="zero")
     for name, p in rbm.named_parameters():
         assert torch.allclose(p.grad, expected[name], atol=1e-10), name
+
+
+@pytest.mark.parametrize("visible_type, visible_shape, hidden_type, label_type", [
+    ("potts", (4, 3), "relu", "categorical"),
+    ("bernoulli", 5, "gaussian", "gaussian"),
+    ("bernoulli", 5, "bernoulli", "null"),
+])
+def test_save_and_load_rbm(tmp_path, visible_type, visible_shape, hidden_type, label_type):
+    from annadca.rbm import load_rbm, save_checkpoint
+    num_classes = 1 if label_type == "gaussian" else 3
+    rbm = _randomize(get_rbm(visible_type, hidden_type, visible_shape, 4, num_classes, label_type=label_type))
+    chains = rbm.sample(gibbs_steps=2, num_samples=20)
+    optimizer = torch.optim.SGD(rbm.parameters(), lr=0.1)
+    save_checkpoint(rbm, chains, optimizer, 7, save_dir=str(tmp_path), metadata={"tokens": "ACG", "idx_to_label": {0: "x"}})
+    loaded, checkpoint = load_rbm(str(tmp_path / "model_update_007.pt"))
+    assert loaded.config() == rbm.config()
+    assert checkpoint["metadata"]["idx_to_label"] == {0: "x"}
+    for (k, p), (_, q) in zip(rbm.state_dict().items(), loaded.state_dict().items()):
+        assert torch.equal(p, q), k
+    for k in ["visible", "label"]:
+        assert torch.equal(checkpoint["chains"][k], chains[k]), k
+    # chains of discrete layers are stored as small integers
+    if visible_type == "potts":
+        assert torch.load(tmp_path / "model_update_007.pt")["chains"]["visible"].dtype == torch.int16
+
+
+def test_pseudo_count_mixes_data_with_uniform():
+    """With the pseudo count, the positive term of each gradient is (1 - pc) <.>_data + pc <.>_uniform, with the hidden
+    units of the uniform component distributed as in the data."""
+    rbm, data, chains = _gradient_setup("potts", (4, 3), "bernoulli", False, False)
+    pc = 0.3
+    rbm.apply_gradient(data, chains, pseudo_count=0.0, standardize=False, centered=False)
+    grads0 = {k: p.grad.clone() for k, p in rbm.named_parameters()}
+    rbm.apply_gradient(data, chains, pseudo_count=pc, standardize=False, centered=False)
+    w = data["weight"].view(-1) / data["weight"].sum()
+    h = rbm.mean_hidden_activation(data["visible"], data["label"])
+    mean_h = w @ h
+    v_neg, l_neg = chains["visible"], chains["label"]
+    h_neg = rbm.mean_hidden_activation(v_neg, l_neg)
+    pos_W = grads0["weight_matrix"] + torch.einsum("nlq,nh->lqh", v_neg, h_neg) / len(v_neg)
+    expected_W = (1 - pc) * pos_W + pc / 3 * mean_h.expand(4, 3, -1) - torch.einsum("nlq,nh->lqh", v_neg, h_neg) / len(v_neg)
+    assert torch.allclose(rbm.weight_matrix.grad, expected_W)
+    pos_v = grads0["visible_layer.bias"] + v_neg.mean(0)
+    assert torch.allclose(rbm.visible_layer.bias.grad, (1 - pc) * pos_v + pc / 3 - v_neg.mean(0))
+    # the hidden bias is not affected
+    assert torch.allclose(rbm.hidden_layer.bias.grad, grads0["hidden_layer.bias"])
+
+
+def test_label_matrix_regularization():
+    rbm = _small_bernoulli_rbm()
+    rbm.weight_matrix.grad = torch.zeros_like(rbm.weight_matrix)
+    rbm.label_matrix.grad = torch.zeros_like(rbm.label_matrix)
+    rbm.regularize(l1_label_strength=0.1, l2_label_strength=0.2)
+    assert torch.allclose(rbm.label_matrix.grad, -0.1 * rbm.label_matrix.sign() - 0.2 * rbm.label_matrix)
+    assert torch.all(rbm.weight_matrix.grad == 0)

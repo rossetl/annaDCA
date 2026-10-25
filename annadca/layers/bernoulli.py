@@ -2,17 +2,18 @@ from annadca.layers.layer import Layer
 import torch
 from typing import Optional, Tuple
 from torch.nn.functional import softplus
-from annadca.utils.stats import get_freq
+from annadca.utils.stats import get_freq, get_mean
 
 
 class BernoulliLayer(Layer):
     """Layer of binary {0, 1} units with potential U(x) = - bias * x."""
+    layer_type = "bernoulli"
+
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
-        **kwargs
     ):
-        super().__init__(shape=shape, **kwargs)
+        super().__init__(shape=shape)
         assert len(self.shape) == 1, f"Bernoulli layer shape must be one-dimensional, got {self.shape}."
 
 
@@ -47,7 +48,7 @@ class BernoulliLayer(Layer):
         return torch.bernoulli(mean.expand((num_samples,) + self.shape))
 
 
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         p = torch.sigmoid(beta * (I + self.bias))
         return torch.bernoulli(p)
 
@@ -65,6 +66,14 @@ class BernoulliLayer(Layer):
 
     def layer_energy(self, x: torch.Tensor) -> torch.Tensor:
         return - x @ self.bias
+
+
+    def uniform_mean(self) -> torch.Tensor:
+        return torch.full_like(self.bias, 0.5)
+
+
+    def compress(self, x: torch.Tensor) -> torch.Tensor:
+        return x.to(torch.uint8)
 
 
     def data_meanvar(
@@ -96,4 +105,4 @@ class BernoulliLayer(Layer):
         weights: Optional[torch.Tensor] = None,
         pseudo_count: float = 0.0,
     ):
-        self.bias.grad = get_freq(mean_h_pos, weights=weights, pseudo_count=pseudo_count) - mean_h_neg.mean(0)
+        self.bias.grad = get_mean(mean_h_pos, weights=weights) - mean_h_neg.mean(0)

@@ -1,24 +1,18 @@
 import os
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 import torch
 import copy
 from torch.nn import Parameter
-from annadca.layers.layer import Layer
-from annadca.layers.bernoulli import BernoulliLayer
-from annadca.layers.potts import PottsLayer
+from annadca.layers.layer import Layer, LAYER_REGISTRY, build_layer
 from annadca.layers.gaussian import GaussianLayer
-from annadca.layers.label import CategoricalLabelLayer
-from annadca.layers.relu import ReLULayer
-from annadca.utils.functions import mm_left, batched_mm_left, batched_mm_right, batched_outer, multiply, outer
+from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
+from annadca.utils.functions import mm_left, batched_mm_left, batched_mm_right, batched_outer, outer
 from annadca.utils.stats import get_meanvar, get_mean
 
 
-AVAILABLE_LAYERS = {
-    "potts": PottsLayer,
-    "bernoulli": BernoulliLayer,
-    "relu": ReLULayer,
-    "gaussian": GaussianLayer,
-}
+VISIBLE_TYPES = [name for name, cls in LAYER_REGISTRY.items() if cls.can_be_visible and name not in ("categorical", "null")]
+HIDDEN_TYPES = [name for name, cls in LAYER_REGISTRY.items() if cls.can_be_hidden]
+LABEL_TYPES = {"categorical": CategoricalLabelLayer, "gaussian": GaussianLayer, "null": LabelNullLayer}
 
 
 def get_rbm(
@@ -27,8 +21,8 @@ def get_rbm(
     visible_shape: int | Tuple[int, ...] | torch.Size,
     hidden_shape: int | torch.Size,
     num_classes: int,
-    continuous_label: Optional[bool] = False,
-    **kwargs,
+    continuous_label: bool = False,
+    label_type: Optional[str] = None,
 ) -> "AnnaRBM":
     """Builds an AnnaRBM model from the names of the layers.
 
@@ -39,49 +33,85 @@ def get_rbm(
         hidden_shape (int | torch.Size): Number of hidden units.
         num_classes (int): Number of label classes (1 for continuous labels).
         continuous_label (bool, optional): If True, the labels are modeled with a Gaussian layer. Defaults to False.
+        label_type (str, optional): Type of the label layer, one of 'categorical', 'gaussian', 'null'. Overrides `continuous_label`.
 
     Returns:
         AnnaRBM: The model.
     """
-    assert visible_type in AVAILABLE_LAYERS, f"Unknown visible layer type: {visible_type}. Available types are: {list(AVAILABLE_LAYERS.keys())}"
-    assert hidden_type in AVAILABLE_LAYERS, f"Unknown hidden layer type: {hidden_type}. Available types are: {list(AVAILABLE_LAYERS.keys())}"
-    visible_layer = AVAILABLE_LAYERS[visible_type](shape=visible_shape)
-    hidden_layer = AVAILABLE_LAYERS[hidden_type](shape=hidden_shape)
-    if continuous_label:
-        label_layer = GaussianLayer(shape=(num_classes,))
-    else:
-        label_layer = CategoricalLabelLayer(shape=(num_classes,))
+    assert visible_type in VISIBLE_TYPES, f"Unknown visible layer type: {visible_type}. Available types are: {VISIBLE_TYPES}"
+    assert hidden_type in HIDDEN_TYPES, f"Unknown hidden layer type: {hidden_type}. Available types are: {HIDDEN_TYPES}"
+    if label_type is None:
+        label_type = "gaussian" if continuous_label else "categorical"
+    assert label_type in LABEL_TYPES, f"Unknown label layer type: {label_type}. Available types are: {list(LABEL_TYPES)}"
     return AnnaRBM(
-        visible_layer=visible_layer,
-        hidden_layer=hidden_layer,
-        label_layer=label_layer,
-        **kwargs
+        visible_layer=LAYER_REGISTRY[visible_type](shape=visible_shape),
+        hidden_layer=LAYER_REGISTRY[hidden_type](shape=hidden_shape),
+        label_layer=LABEL_TYPES[label_type](shape=(num_classes,)),
     )
 
 
-def save_checkpoint(model, chains, optimizer, update, save_dir="checkpoints"):
-    """Save model checkpoint with epoch number."""
+def save_checkpoint(
+    model: "AnnaRBM",
+    chains: Dict[str, torch.Tensor],
+    optimizer: torch.optim.Optimizer,
+    update: int,
+    save_dir: str = "checkpoints",
+    scheduler: Optional[Any] = None,
+    metadata: Optional[dict] = None,
+):
+    """Saves a self-describing checkpoint, that can be loaded with `load_rbm`.
 
-    # Create directory if it doesn't exist
+    Args:
+        model (AnnaRBM): The model.
+        chains (Dict[str, torch.Tensor]): Persistent chains, stored in compressed form.
+        optimizer (torch.optim.Optimizer): Optimizer.
+        update (int): Number of gradient updates performed.
+        save_dir (str, optional): Directory of the checkpoints. Defaults to "checkpoints".
+        scheduler (optional): Learning rate scheduler.
+        metadata (dict, optional): Additional information, e.g. the alphabet and the label names.
+    """
     os.makedirs(save_dir, exist_ok=True)
-
     # Handles prefixes when the model gets compiled
-    orig_state_dict = model.state_dict()
-    state_dict = {k.replace('_orig_mod.', ''): v for k, v in orig_state_dict.items()}
-
+    state_dict = {k.replace('_orig_mod.', ''): v for k, v in model.state_dict().items()}
     checkpoint = {
-        'update': update,
-        'model_state_dict': state_dict,
-        "chains": chains,
-        'optimizer_state_dict': optimizer.state_dict(),
-        "shape": model.shape,
-        "num_classes": model.num_classes,
+        "update": update,
+        "config": model.config(),
+        "model_state_dict": state_dict,
+        "chains": model.compress_chains(chains),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
+        "metadata": metadata or {},
+        "rng_state": torch.get_rng_state(),
     }
+    torch.save(checkpoint, os.path.join(save_dir, f"model_update_{update:03d}.pt"))
 
-    # Save with update number in filename
-    filename = f"model_update_{update:03d}.pt"
-    filepath = os.path.join(save_dir, filename)
-    torch.save(checkpoint, filepath)
+
+def load_rbm(
+    filepath: str,
+    device: torch.device | str = "cpu",
+    dtype: torch.dtype = torch.float32,
+) -> Tuple["AnnaRBM", Dict[str, Any]]:
+    """Loads a model saved with `save_checkpoint`.
+
+    Args:
+        filepath (str): Path to the checkpoint.
+        device (torch.device | str, optional): Device of the model. Defaults to "cpu".
+        dtype (torch.dtype, optional): Data type of the model. Defaults to torch.float32.
+
+    Returns:
+        Tuple[AnnaRBM, Dict[str, Any]]: The model and the checkpoint dictionary, with the chains decompressed.
+    """
+    checkpoint = torch.load(filepath, map_location=device, weights_only=True)
+    if "config" not in checkpoint:
+        raise ValueError(
+            f"The checkpoint {filepath} does not contain the model configuration (it was produced by an older version). "
+            "Build the model with `get_rbm` and load `checkpoint['model_state_dict']` with `load_state_dict`."
+        )
+    rbm = AnnaRBM.from_config(checkpoint["config"])
+    rbm.load_state_dict(checkpoint["model_state_dict"])
+    rbm.to(device=device, dtype=dtype)
+    checkpoint["chains"] = rbm.decompress_chains(checkpoint["chains"])
+    return rbm, checkpoint
 
 
 def _sum_per_sample(x: torch.Tensor) -> torch.Tensor:
@@ -106,7 +136,6 @@ class AnnaRBM(torch.nn.Module):
         hidden_layer: Layer,
         label_layer: Layer,
         num_classes: Optional[int] = None,
-        **kwargs
     ):
         super(AnnaRBM, self).__init__()
         assert isinstance(visible_layer, Layer), "visible_layer must be an instance of Layer."
@@ -123,7 +152,6 @@ class AnnaRBM(torch.nn.Module):
         self.visible_layer = visible_layer
         self.hidden_layer = hidden_layer
         self.label_layer = label_layer
-        self.kwargs = kwargs
         self.shape = self.visible_layer.shape + self.hidden_layer.shape # (num_visible, [num_states,] num_hidden)
         self.num_classes = self.label_layer.shape[0]
 
@@ -137,6 +165,37 @@ class AnnaRBM(torch.nn.Module):
         self.register_buffer("scale_v", torch.ones(self.visible_layer.shape))
         self.register_buffer("scale_h", torch.ones(self.hidden_layer.shape))
         self.register_buffer("scale_l", torch.ones(self.label_layer.shape))
+
+
+    def config(self) -> dict:
+        """Configuration of the model: the configurations of its layers."""
+        return {
+            "visible_layer": self.visible_layer.config(),
+            "hidden_layer": self.hidden_layer.config(),
+            "label_layer": self.label_layer.config(),
+        }
+
+
+    @classmethod
+    def from_config(cls, config: dict) -> "AnnaRBM":
+        """Builds a model (with freshly initialized parameters) from its configuration."""
+        return cls(
+            visible_layer=build_layer(config["visible_layer"]),
+            hidden_layer=build_layer(config["hidden_layer"]),
+            label_layer=build_layer(config["label_layer"]),
+        )
+
+
+    def compress_chains(self, chains: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Compact representation of the chains (e.g. state indices instead of one-hot vectors), used for saving."""
+        layers = {"visible": self.visible_layer, "hidden": self.hidden_layer, "label": self.label_layer}
+        return {k: layers[k].compress(v) if k in layers else v for k, v in chains.items()}
+
+
+    def decompress_chains(self, chains: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Inverse of `compress_chains`. Also accepts uncompressed chains."""
+        layers = {"visible": self.visible_layer, "hidden": self.hidden_layer, "label": self.label_layer}
+        return {k: layers[k].decompress(v) if k in layers else v for k, v in chains.items()}
 
 
     def compile_sampling(self, mode: str = "default"):
@@ -227,7 +286,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Sampled visible units given the hidden units.
         """
-        return self.visible_layer.forward(self.input_visibles(hidden), beta)
+        return self.visible_layer.sample(self.input_visibles(hidden), beta)
 
 
     def sample_hiddens(
@@ -246,7 +305,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Sampled hidden units.
         """
-        return self.hidden_layer.forward(self.input_hiddens(visible, label), beta)
+        return self.hidden_layer.sample(self.input_hiddens(visible, label), beta)
 
 
     def sample_labels(
@@ -263,7 +322,7 @@ class AnnaRBM(torch.nn.Module):
         Returns:
             torch.Tensor: Sampled label units given the hidden units.
         """
-        return self.label_layer.forward(self.input_labels(hidden), beta)
+        return self.label_layer.sample(self.input_labels(hidden), beta)
 
 
     def gibbs_step(
@@ -563,15 +622,24 @@ class AnnaRBM(torch.nn.Module):
         l1_strength: float = 0.0,
         l2_strength: float = 0.0,
         l1l2_strength: float = 0.0,
+        l1_label_strength: float = 0.0,
+        l2_label_strength: float = 0.0,
     ):
-        """Adds the gradient of the regularization terms on the weight matrix. Must be called after the gradient has been computed.
+        """Adds the gradient of the regularization terms on the weight and label matrices. Must be called after the gradient has been computed.
 
         Args:
             l1_strength (float, optional): L1 penalty: l1 * sum |W|. Defaults to 0.0.
             l2_strength (float, optional): L2 penalty: l2/2 * sum W^2. Defaults to 0.0.
             l1l2_strength (float, optional): L1^2 penalty: l1l2/(2N) * sum_mu (sum_{i(,a)} |W_{i(a)mu}|)^2, with N the number of
                 visible entries, which favors sparse hidden units. Defaults to 0.0.
+            l1_label_strength (float, optional): L1 penalty on the label matrix. Defaults to 0.0.
+            l2_label_strength (float, optional): L2 penalty on the label matrix. Defaults to 0.0.
         """
+        if self.label_matrix.grad is not None:
+            if l1_label_strength > 0:
+                self.label_matrix.grad -= l1_label_strength * self.label_matrix.sign()
+            if l2_label_strength > 0:
+                self.label_matrix.grad -= l2_label_strength * self.label_matrix
         if self.weight_matrix.grad is None:
             return
         if l1_strength > 0:
@@ -594,6 +662,8 @@ class AnnaRBM(torch.nn.Module):
         standardize: bool = True,
         centered: bool = True,
         missing_labels: str = "posterior",
+        l1_label_strength: float = 0.0,
+        l2_label_strength: float = 0.0,
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it in the `.grad` attribute of the parameters.
 
@@ -610,6 +680,10 @@ class AnnaRBM(torch.nn.Module):
         summed over with the model posterior p(l | v) (see `meanvar_hidden_activation_missing_labels`); with
         `missing_labels="zero"`, the all-zero vector is used as label.
 
+        For discrete layers, the pseudo count regularizes the data statistics as the mixture (1 - pseudo_count) * data
+        + pseudo_count * uniform distribution, in which the hidden units of the uniform component are distributed as in
+        the data. This is applied consistently to the bias and to the weight gradients.
+
         Args:
             data (Dict[str, torch.Tensor]): Data batch.
             chains (Dict[str, torch.Tensor]): Chains.
@@ -620,6 +694,8 @@ class AnnaRBM(torch.nn.Module):
             standardize (bool, optional): Whether to rescale the hidden and label units by their standard deviation (implies centering). Defaults to True.
             centered (bool, optional): Whether to center the units by their mean. Defaults to True.
             missing_labels (str, optional): How to treat the missing categorical labels: 'posterior' or 'zero'. Defaults to 'posterior'.
+            l1_label_strength (float, optional): L1 regularization weight of the label matrix. Defaults to 0.0.
+            l2_label_strength (float, optional): L2 regularization weight of the label matrix. Defaults to 0.0.
         """
         assert missing_labels in ("posterior", "zero"), f"Unknown missing_labels option: {missing_labels}. Choose among 'posterior' and 'zero'."
         centered = centered or standardize
@@ -685,11 +761,24 @@ class AnnaRBM(torch.nn.Module):
         l_neg = (l_neg - self.offset_l) / self.scale_l
         h_pos = (h_pos - self.offset_h) / self.scale_h
         h_neg = (h_neg - self.offset_h) / self.scale_h
-        grad_weight_matrix = batched_outer(multiply(v_pos, weights), h_pos) - batched_outer(v_neg, h_neg) / num_chains
-        grad_label_matrix = batched_outer(multiply(l_pos, weights), h_pos) - batched_outer(l_neg, h_neg) / num_chains
+        mean_h_pos = get_mean(h_pos, weights=weights)
+
+        def positive_term(x: torch.Tensor, layer: Layer, offset: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+            """<x h> over the data, regularized with the pseudo count for discrete layers."""
+            term = batched_outer(x * weights.view((-1,) + (1,) * (x.dim() - 1)), h_pos)
+            uniform = layer.uniform_mean()
+            if pseudo_count > 0 and uniform is not None:
+                term = (1 - pseudo_count) * term + pseudo_count * outer((uniform - offset) / scale, mean_h_pos)
+            return term
+
+        grad_weight_matrix = positive_term(v_pos, self.visible_layer, self.offset_v, self.scale_v) - batched_outer(v_neg, h_neg) / num_chains
+        grad_label_matrix = positive_term(l_pos, self.label_layer, self.offset_l, self.scale_l) - batched_outer(l_neg, h_neg) / num_chains
         if missing is not None:
             # The covariance is invariant under centering and scales like l h
-            grad_label_matrix += torch.einsum("n,nch->ch", weights[missing], label_hidden_cov) / outer(self.scale_l, self.scale_h)
+            label_hidden_cov = torch.einsum("n,nch->ch", weights[missing], label_hidden_cov) / outer(self.scale_l, self.scale_h)
+            if pseudo_count > 0:
+                label_hidden_cov = (1 - pseudo_count) * label_hidden_cov
+            grad_label_matrix += label_hidden_cov
 
         # Map the gradient back to the original parameters
         grad_weight_matrix = grad_weight_matrix / outer(self.scale_v, self.scale_h)
@@ -702,7 +791,7 @@ class AnnaRBM(torch.nn.Module):
         self.weight_matrix.grad = grad_weight_matrix
         self.label_matrix.grad = grad_label_matrix
         # Regularization
-        self.regularize(l1_strength, l2_strength, l1l2_strength)
+        self.regularize(l1_strength, l2_strength, l1l2_strength, l1_label_strength, l2_label_strength)
 
 
     def forward(
@@ -710,13 +799,7 @@ class AnnaRBM(torch.nn.Module):
         data_batch: Dict[str, torch.Tensor],
         chains: Dict[str, torch.Tensor],
         gibbs_steps: int,
-        pseudo_count: float = 0.0,
-        l1_strength: float = 0.0,
-        l2_strength: float = 0.0,
-        l1l2_strength: float = 0.0,
-        standardize: bool = True,
-        centered: bool = True,
-        missing_labels: str = "posterior",
+        **gradient_kwargs,
     ) -> Dict[str, torch.Tensor]:
         """Computes the gradient of the parameters of the model and updates the Markov chains using the Persistent Contrastive Divergence algorithm.
         The parameters are not updated: the optimizer step has to be performed afterwards.
@@ -725,31 +808,12 @@ class AnnaRBM(torch.nn.Module):
             data_batch (Dict[str, torch.Tensor]): Batch of data.
             chains (Dict[str, torch.Tensor]): Persistent chains.
             gibbs_steps (int): Number of Alternating Gibbs Sampling steps.
-            pseudo_count (float, optional): Pseudo count to be added to the data frequencies. Defaults to 0.0.
-            l1_strength (float, optional): L1 regularization weight. Defaults to 0.0.
-            l2_strength (float, optional): L2 regularization weight. Defaults to 0.0.
-            l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
-            standardize (bool, optional): Whether to use the standardized gradient. Defaults to True.
-            centered (bool, optional): Whether to use the centered gradient. Defaults to True.
-            missing_labels (str, optional): How to treat the missing categorical labels: 'posterior' or 'zero'. Defaults to 'posterior'.
+            **gradient_kwargs: Options of the gradient, see `apply_gradient`.
 
         Returns:
             Dict[str, torch.Tensor]: Updated chains.
         """
-        # Compute the gradient of the Log-Likelihood
-        self.apply_gradient(
-            data=data_batch,
-            chains=chains,
-            pseudo_count=pseudo_count,
-            l1_strength=l1_strength,
-            l2_strength=l2_strength,
-            l1l2_strength=l1l2_strength,
-            standardize=standardize,
-            centered=centered,
-            missing_labels=missing_labels,
-        )
-
-        # Update the persistent chains
+        self.apply_gradient(data=data_batch, chains=chains, **gradient_kwargs)
         return self.sample(
             gibbs_steps=gibbs_steps,
             visible=chains["visible"],
@@ -768,6 +832,10 @@ class AnnaRBM(torch.nn.Module):
         """Returns a copy of the model where the generative part (visible and hidden layers, weight matrix) is multiplied by
         `gen_strength`, the label part (label layer and label matrix) by `label_strength`, and the visible bias is shifted by
         `wt_strength * wt`.
+
+        Since multiplying the parameters by a factor is equivalent to changing the inverse temperature, the biased model
+        samples sequences at different effective temperatures for the sequence and the annotation parts of the energy,
+        optionally biased towards a reference sequence (e.g. a wild type), as in sequence design applications.
 
         Args:
             gen_strength (float): Multiplicative factor of the generative parameters.

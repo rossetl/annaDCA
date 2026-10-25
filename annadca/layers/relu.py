@@ -13,13 +13,14 @@ class ReLULayer(GaussianLayer):
         shape: Shape of the layer.
         learn_scale (bool, optional): Whether the scale (precision) of the units is learned. Defaults to False.
     """
+    layer_type = "relu"
+
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
         learn_scale: bool = False,
-        **kwargs
     ):
-        super().__init__(shape=shape, learn_scale=learn_scale, **kwargs)
+        super().__init__(shape=shape, learn_scale=learn_scale)
 
 
     def _mu_sigma(self, I: torch.Tensor, beta: float = 1.0) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -56,7 +57,7 @@ class ReLULayer(GaussianLayer):
         return sample_truncated_normal(mu, sigma, torch.zeros_like(mu), torch.full_like(mu, float("inf")))
 
 
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         mu, sigma = self._mu_sigma(I, beta)
         return sample_truncated_normal(mu, sigma, torch.zeros_like(mu), torch.full_like(mu, float("inf")))
 

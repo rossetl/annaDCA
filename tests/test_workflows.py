@@ -26,7 +26,7 @@ def test_save_load_chains_binary_continuous(tmp_path):
     rbm = get_rbm("bernoulli", "bernoulli", 6, 3, 1, continuous_label=True)
     chains = rbm.init_chains(10)
     path = str(tmp_path / "chains.fasta")
-    save_chains(path, chains, tokens="01")
+    save_chains(path, chains, tokens="01", continuous_labels=True)
     loaded = load_chains(path, tokens="01", num_classes=1, continuous_labels=True)
     assert torch.equal(loaded["visible"], chains["visible"])
     assert torch.allclose(loaded["label"], chains["label"], rtol=1e-5)
@@ -69,3 +69,52 @@ def test_train_and_resume(tmp_path):
     rbm = get_rbm("potts", "bernoulli", (8, 4), 5, 2)
     rbm.load_state_dict(checkpoint["model_state_dict"])
     assert all(torch.isfinite(p).all() for p in rbm.parameters())
+
+
+def _write_dataset(path, num=60, length=8, missing=False):
+    rng = np.random.default_rng(0)
+    sequences = ["".join(rng.choice(list("ACDE"), size=length)) for _ in range(num)]
+    labels = rng.choice(["a", "b"], size=num).astype(object)
+    if missing:
+        labels[::4] = None
+    pd.DataFrame({"name": [f"s{i}" for i in range(num)], "sequence": sequences, "label": labels}).to_csv(path, index=False)
+
+
+def test_cli_train_overwrite_log_and_sample(tmp_path):
+    import pytest
+    from annadca.cli import main
+    from annadca.io import load_chains
+    from annadca.rbm import load_rbm
+    path = tmp_path / "data.csv"
+    _write_dataset(path, missing=True)
+    out = tmp_path / "out"
+    common = ["train", "-d", str(path), "-o", str(out), "-l", "run", "--device", "cpu", "--nchains", "30",
+              "--batch_size", "16", "-H", "5", "--save_every", "5", "--no_compile", "--alphabet", "ACDE",
+              "--lr_final", "0.001", "--max_grad_norm", "10", "--l2_label", "0.01"]
+    main(common + ["--nupdates", "10"])
+    with pytest.raises(FileExistsError):
+        main(common + ["--nupdates", "10"])
+    main(common + ["--nupdates", "10", "--overwrite"])
+
+    ckpt_dir = out / "run_checkpoints"
+    main(common + ["--nupdates", "15", "-p", str(ckpt_dir / "model_update_010.pt")])
+    log = (out / "run.log").read_text()
+    assert "Resumed from" in log and "Pearson Cij" in log
+    rows = [line.split() for line in log.splitlines() if line.split() and line.split()[0].isdigit()]
+    assert [int(r[0]) for r in rows] == [0, 5, 10, 15]
+    assert all(np.isfinite(float(r[3])) for r in rows)
+
+    rbm, checkpoint = load_rbm(str(ckpt_dir / "model_update_015.pt"))
+    assert checkpoint["metadata"]["idx_to_label"] == {0: "a", 1: "b"}
+    assert checkpoint["metadata"]["args"]["pseudocount"] > 0  # set to 1/Meff
+    # the cosine schedule also follows the total number of updates after resuming
+    from annadca.scripts.train import learning_rate
+    assert np.isclose(checkpoint["optimizer_state_dict"]["param_groups"][0]["lr"], learning_rate(14, 0.01, 0.001, 15))
+    assert np.isclose(learning_rate(15, 0.01, 0.001, 15), 0.001) and np.isclose(learning_rate(0, 0.01, 0.001, 15), 0.01)
+
+    samples = tmp_path / "samples.fasta"
+    main(["sample", "-p", str(ckpt_dir / "model_update_015.pt"), "-o", str(samples), "-n", "12",
+          "--gibbs_steps", "5", "--target", "b", "--device", "cpu"])
+    chains = load_chains(str(samples), tokens="ACDE", num_classes=2, label_to_idx={"a": 0, "b": 1})
+    assert chains["visible"].shape == (12, 8, 4)
+    assert torch.all(chains["label"].argmax(-1) == 1)

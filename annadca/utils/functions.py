@@ -1,143 +1,28 @@
+"""Products between the weight matrix W of shape (*visible_shape, num_hiddens) and the units of the layers.
+The visible dimensions are handled with an ellipsis, so the same functions work for (L, h) and (L, q, h) weights."""
 import torch
-from typing import Optional
-
-def mm_left(
-    W: torch.Tensor,
-    x: torch.Tensor
-) -> torch.Tensor:
-    """Generic matrix multiplication operation W @ x between weight tensor W and input tensor x.
-
-    Args:
-        W (torch.Tensor): Weight tensor of size (l, h) or (l, q, h).
-        x (torch.Tensor): Input tensor of size (l,) or (l, q).
-        
-    Returns:
-        torch.Tensor: Output tensor after matrix multiplication: W @ x.
-    """
-    if len(W.shape) == 2:
-        return x @ W
-    elif len(W.shape) == 3:
-        return torch.einsum("lq,lqh->h", x, W)
-    else:
-        raise ValueError("Invalid weight tensor shape.")
 
 
-def batched_mm_left(
-    W: torch.Tensor,
-    x: torch.Tensor
-) -> torch.Tensor:
-    """Generic batched matrix multiplication operation W @ x between weight tensor W and input tensor x.
-
-    Args:
-        W (torch.Tensor): Weight tensor of size (l, h) or (l, q, h).
-        x (torch.Tensor): Input tensor of size (batch_size, l) or (batch_size, l, q).
-        
-    Returns:
-        torch.Tensor: Output tensor after matrix multiplication: W @ x.
-    """
-    if len(W.shape) == 2:
-        return x @ W
-    elif len(W.shape) == 3:
-        return torch.einsum("nlq,lqh->nh", x, W)
-    else:
-        raise ValueError("Invalid weight tensor shape.")
-    
-    
-def mm_right(
-    W: torch.Tensor,
-    x: torch.Tensor
-) -> torch.Tensor:
-    """Generic matrix multiplication operation x @ W between input tensor x and weight tensor W.
-
-    Args:
-        W (torch.Tensor): Weight tensor of size (l, h) or (l, q, h).
-        x (torch.Tensor): Input tensor of size (h,).
-
-    Returns:
-        torch.Tensor: Output tensor after matrix multiplication: W @ x.
-    """
-    return W @ x
+def mm_left(W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """x^T W for a single visible configuration x of shape visible_shape. Returns a tensor of shape (h,)."""
+    return torch.einsum("...,...h->h", x, W)
 
 
-def batched_mm_right(
-    W: torch.Tensor,
-    x: torch.Tensor
-) -> torch.Tensor:
-    """Generic batched matrix multiplication operation x @ W between input tensor x and weight tensor W.
+def batched_mm_left(W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """x^T W for a batch of visible configurations x of shape (n, *visible_shape). Returns a tensor of shape (n, h)."""
+    return torch.einsum("n...,...h->nh", x, W)
 
-    Args:
-        W (torch.Tensor): Weight tensor of size (l, h) or (l, q, h).
-        x (torch.Tensor): Input tensor of size (batch_size, h).
 
-    Returns:
-        torch.Tensor: Output tensor after matrix multiplication: W @ x.
-    """
-    if len(W.shape) == 2:
-        return x @ W.t()
-    elif len(W.shape) == 3:
-        return torch.einsum("nh,lqh->nlq", x, W)
-    else:
-        raise ValueError("Invalid weight tensor shape.")
-    
-    
-def outer(
-    v: torch.Tensor,
-    h: torch.Tensor,
-) -> torch.Tensor:
-    """Compute the outer product of vector v and matrix h.
+def batched_mm_right(W: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    """W x for a batch of hidden configurations x of shape (n, h). Returns a tensor of shape (n, *visible_shape)."""
+    return torch.einsum("nh,...h->n...", x, W)
 
-    Args:
-        v (torch.Tensor): Input vector of size (l,) or (l, q).
-        h (torch.Tensor): Input matrix of size (h,).
 
-    Returns:
-        torch.Tensor: Output tensor of size (l, h) or (l, q, h).
-    """
-    if len(v.shape) == 1:
-        return torch.einsum("l,h->lh", v, h)
-    elif len(v.shape) == 2:
-        return torch.einsum("lq,h->lqh", v, h)
-    else:
-        raise ValueError("Invalid input tensor shape.")
-    
+def outer(v: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+    """Outer product of v of shape visible_shape and h of shape (h,). Returns a tensor of shape (*visible_shape, h)."""
+    return torch.einsum("...,h->...h", v, h)
 
-def batched_outer(
-    v: torch.Tensor,
-    h: torch.Tensor,
-) -> torch.Tensor:
-    """Compute the outer product of vector v and matrix h.
 
-    Args:
-        v (torch.Tensor): Input vector of size (batch_size, l) or (batch_size, l, q).
-        h (torch.Tensor): Input matrix of size (batch_size, h).
-
-    Returns:
-        torch.Tensor: Output tensor of size (l, h) or (l, q, h).
-    """
-    if len(v.shape) == 2:
-        return torch.einsum("nl,nh->lh", v, h)
-    elif len(v.shape) == 3:
-        return torch.einsum("nlq,nh->lqh", v, h)
-    else:
-        raise ValueError("Invalid input tensor shape.")
-    
-    
-def multiply(
-    x: torch.Tensor,
-    y: torch.Tensor
-) -> torch.Tensor:
-    """Generic element-wise multiplication operation between input tensors x and y.
-
-    Args:
-        x (torch.Tensor): First input tensor of shape (batch_size, l) or (batch_size, l, q).
-        y (torch.Tensor): Second input tensor of shape (batch_size, ...).
-
-    Returns:
-        torch.Tensor: Output tensor after element-wise multiplication.
-    """
-    if len(x.shape) == 2:
-        return x * y.view(y.shape[0], 1)
-    elif len(x.shape) == 3:
-        return x * y.view(y.shape[0], 1, 1)
-    else:
-        raise ValueError("Invalid input tensor shape.")
+def batched_outer(v: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+    """Sum over the batch of the outer products of v (n, *visible_shape) and h (n, h). Returns a tensor of shape (*visible_shape, h)."""
+    return torch.einsum("n...,nh->...h", v, h)

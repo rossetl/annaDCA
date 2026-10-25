@@ -1,34 +1,20 @@
-import subprocess
 import sys
-import os
 
-def main():
-    # Get the directory of the current script
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+COMMANDS = ("train", "sample")
 
-    # Check if the first positional argument is provided
-    if len(sys.argv) < 2:
-        print("Error: No command provided. Use 'train'.")
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) < 1 or argv[0] not in COMMANDS:
+        print(f"Usage: annadca {{{','.join(COMMANDS)}}} [options]. Use 'annadca <command> -h' for the options of each command.")
         sys.exit(1)
+    command, args = argv[0], argv[1:]
+    if command == "train":
+        from annadca.scripts.train import main as command_main
+    else:
+        from annadca.scripts.sample import main as command_main
+    command_main(args)
 
-    # Assign the first positional argument to a variable
-    COMMAND = sys.argv[1]
-
-    # Map the command to the corresponding script
-    match COMMAND:
-        case "train":
-            SCRIPT = "train.py"
-        case _:
-            print(f"Error: Invalid command '{COMMAND}'. Use 'train'.")
-            sys.exit(1)
-
-    # Run the corresponding Python script with the remaining optional arguments
-    REPO_SCRIPTS = os.path.join(SCRIPT_DIR, "scripts")
-    script_path = os.path.join(REPO_SCRIPTS, SCRIPT)
-    returncode = subprocess.call(
-        [sys.executable, script_path] + sys.argv[2:],
-    )
-    sys.exit(returncode)
 
 if __name__ == "__main__":
     main()

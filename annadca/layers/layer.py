@@ -5,6 +5,18 @@ from torch.nn import Parameter
 from annadca.utils.stats import get_meanvar
 
 
+LAYER_REGISTRY = {}
+
+
+def build_layer(config: dict) -> "Layer":
+    """Builds a layer from its configuration, as returned by `Layer.config()`."""
+    config = dict(config)
+    layer_type = config.pop("type")
+    if layer_type not in LAYER_REGISTRY:
+        raise ValueError(f"Unknown layer type: {layer_type}. Available types are: {list(LAYER_REGISTRY)}")
+    return LAYER_REGISTRY[layer_type](**config)
+
+
 class Layer(ABC, torch.nn.Module):
     """Base class for the layers of the RBM.
 
@@ -13,23 +25,34 @@ class Layer(ABC, torch.nn.Module):
 
     The RBM interacts with the layers only through the methods defined here. Each subclass declares whether it can be
     used as a visible (or label) layer and/or as a hidden layer through the class attributes `can_be_visible` and
-    `can_be_hidden`.
+    `can_be_hidden`. Subclasses that define `layer_type` are registered, so that they can be rebuilt from their
+    configuration with `build_layer`.
     """
+    layer_type: Optional[str] = None
     can_be_visible: bool = True
     can_be_hidden: bool = True
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if cls.__dict__.get("layer_type") is not None:
+            LAYER_REGISTRY[cls.layer_type] = cls
+
 
     def __init__(
         self,
         shape: int | Tuple[int, ...] | torch.Size,
-        **kwargs
     ):
         super().__init__()
         if isinstance(shape, int):
             shape = (shape,)
         assert isinstance(shape, (tuple, list, torch.Size)), "Shape must be integer, tuple, list, or torch.Size."
         self.shape = torch.Size(shape)
-        self.kwargs = kwargs
         self.bias = Parameter(torch.zeros(self.shape), requires_grad=False)
+
+
+    def config(self) -> dict:
+        """Configuration of the layer: the arguments needed to rebuild it with `build_layer`."""
+        return {"type": self.layer_type, "shape": list(self.shape)}
 
 
     @abstractmethod
@@ -73,7 +96,7 @@ class Layer(ABC, torch.nn.Module):
 
 
     @abstractmethod
-    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+    def sample(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
         """Samples from the layer's distribution given the activation input tensor.
         If `p(x)` is the layer distribution and 'I' the activation input tensor, this method samples from 'p(x|I + bias)'.
 
@@ -85,6 +108,11 @@ class Layer(ABC, torch.nn.Module):
             torch.Tensor: Sampled output tensor of shape (batch_size, *shape).
         """
         pass
+
+
+    def forward(self, I: torch.Tensor, beta: float = 1.0) -> torch.Tensor:
+        """Same as `sample`."""
+        return self.sample(I, beta)
 
 
     @abstractmethod
@@ -125,6 +153,23 @@ class Layer(ABC, torch.nn.Module):
             torch.Tensor: Energy contribution of the layer of shape (batch_size,).
         """
         pass
+
+
+    def uniform_mean(self) -> Optional[torch.Tensor]:
+        """Mean of the units under the uniform distribution, used to regularize the data statistics of discrete layers
+        with a pseudo count (mixture of the data with the uniform distribution). None for continuous layers, which are
+        not regularized with the pseudo count."""
+        return None
+
+
+    def compress(self, x: torch.Tensor) -> torch.Tensor:
+        """Compact representation of the configurations, used to store the chains."""
+        return x
+
+
+    def decompress(self, x: torch.Tensor) -> torch.Tensor:
+        """Inverse of `compress`. Also accepts the full (uncompressed) representation."""
+        return x.to(self.bias)
 
 
     def data_meanvar(
