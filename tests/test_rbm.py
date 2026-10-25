@@ -2,9 +2,9 @@ import itertools
 import math
 import torch
 import pytest
-from annadca.rbm import AnnaRBM, get_rbm
-from annadca.layers import BernoulliLayer, PottsLayer, GaussianLayer, ReLULayer, CategoricalLabelLayer
-from annadca.utils.functions import mm_left
+from annarbm.rbm import AnnaRBM, get_rbm
+from annarbm.layers import BernoulliLayer, PottsLayer, GaussianLayer, ReLULayer, CategoricalLabelLayer
+from annarbm.utils.functions import mm_left
 
 DTYPE = torch.float64
 
@@ -289,7 +289,7 @@ def test_missing_labels_zero_option():
     ("bernoulli", 5, "bernoulli", "null"),
 ])
 def test_save_and_load_rbm(tmp_path, visible_type, visible_shape, hidden_type, label_type):
-    from annadca.rbm import load_rbm, save_checkpoint
+    from annarbm.rbm import load_rbm, save_checkpoint
     num_classes = 1 if label_type == "gaussian" else 3
     rbm = _randomize(get_rbm(visible_type, hidden_type, visible_shape, 4, num_classes, label_type=label_type))
     chains = rbm.sample(gibbs_steps=2, num_samples=20)

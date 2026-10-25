@@ -1,7 +1,7 @@
 import argparse
 
 
-def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParser:
+def add_args_model(parser : argparse.ArgumentParser) -> argparse.ArgumentParser:
     dca_args = parser.add_argument_group("Training an annaRBM model.")
     dca_args.add_argument("-d", "--data",         type=str,  required=True,         help="Filename of the dataset to be used for training the model. Can be a fasta file or a csv file containing the sequences and their annotations.")
     dca_args.add_argument("-o", "--output",       type=str,  default="annaRBM",     help="(Defaults to ./annaRBM). Path to the folder where to save the model.")
@@ -51,7 +51,7 @@ def add_args_reweighting(parser: argparse.ArgumentParser) -> argparse.ArgumentPa
     return parser
 
 def add_args_train(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-    parser = add_args_annadca(parser)
+    parser = add_args_model(parser)
     parser = add_args_reweighting(parser)
 
     return parser

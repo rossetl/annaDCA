@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "annadca"
+name = "annarbm"
 version = "0.2.1"
-description = "Annotation Assisted Direct Coupling Analysis"
+description = "Restricted Boltzmann Machines trained on sequences and their annotations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -28,7 +28,7 @@ dependencies = [
 plot = ["matplotlib>=3.7"]
 
 [project.scripts]
-annadca = "annadca.cli:main"
+annarbm = "annarbm.cli:main"
 
 [project.urls]
 Repository = "https://github.com/rossetl/annaDCA"
@@ -38,7 +38,7 @@ Issues = "https://github.com/rossetl/annaDCA/issues"
 dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
-include = ["annadca*"]
+include = ["annarbm*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

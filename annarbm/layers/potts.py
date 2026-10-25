@@ -1,8 +1,8 @@
-from annadca.layers.layer import Layer
+from annarbm.layers.layer import Layer
 import torch
 from typing import Optional, Tuple
 from torch.nn.functional import one_hot
-from annadca.utils.stats import get_freq
+from annarbm.utils.stats import get_freq
 
 
 class PottsLayer(Layer):

@@ -2,7 +2,7 @@ import torch
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 from torch.nn import Parameter
-from annadca.utils.stats import get_meanvar
+from annarbm.utils.stats import get_meanvar
 
 
 LAYER_REGISTRY = {}

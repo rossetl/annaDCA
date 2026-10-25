@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from annadca.utils.sequences import get_tokens, encode_sequence, decode_sequence, compute_weights
+from annarbm.utils.sequences import get_tokens, encode_sequence, decode_sequence, compute_weights
 
 
 def test_tokens_and_encoding_roundtrip():

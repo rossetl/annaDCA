@@ -4,9 +4,9 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
-from annadca.rbm import get_rbm
-from annadca.io import save_chains, load_chains
-from annadca.utils.analysis import mutual_information
+from annarbm.rbm import get_rbm
+from annarbm.io import save_chains, load_chains
+from annarbm.utils.analysis import mutual_information
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -44,7 +44,7 @@ def test_mutual_information_shapes():
 def _train(*args):
     env = dict(os.environ, PYTHONPATH=REPO + os.pathsep + os.environ.get("PYTHONPATH", ""))
     result = subprocess.run(
-        [sys.executable, os.path.join(REPO, "annadca", "scripts", "train.py"), *args],
+        [sys.executable, os.path.join(REPO, "annarbm", "scripts", "train.py"), *args],
         env=env, capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
@@ -82,9 +82,9 @@ def _write_dataset(path, num=60, length=8, missing=False):
 
 def test_cli_train_overwrite_log_and_sample(tmp_path):
     import pytest
-    from annadca.cli import main
-    from annadca.io import load_chains
-    from annadca.rbm import load_rbm
+    from annarbm.cli import main
+    from annarbm.io import load_chains
+    from annarbm.rbm import load_rbm
     path = tmp_path / "data.csv"
     _write_dataset(path, missing=True)
     out = tmp_path / "out"
@@ -108,7 +108,7 @@ def test_cli_train_overwrite_log_and_sample(tmp_path):
     assert checkpoint["metadata"]["idx_to_label"] == {0: "a", 1: "b"}
     assert checkpoint["metadata"]["args"]["pseudocount"] > 0  # set to 1/Meff
     # the cosine schedule also follows the total number of updates after resuming
-    from annadca.scripts.train import learning_rate
+    from annarbm.scripts.train import learning_rate
     assert np.isclose(checkpoint["optimizer_state_dict"]["param_groups"][0]["lr"], learning_rate(14, 0.01, 0.001, 15))
     assert np.isclose(learning_rate(15, 0.01, 0.001, 15), 0.001) and np.isclose(learning_rate(0, 0.01, 0.001, 15), 0.01)
 

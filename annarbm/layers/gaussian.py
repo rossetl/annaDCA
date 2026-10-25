@@ -1,8 +1,8 @@
-from annadca.layers.layer import Layer
+from annarbm.layers.layer import Layer
 import torch
 from typing import Optional, Tuple
 from torch.nn import Parameter
-from annadca.utils.stats import get_mean, get_meanvar
+from annarbm.utils.stats import get_mean, get_meanvar
 import math
 
 

@@ -6,8 +6,8 @@ import pandas as pd
 from torch.utils.data import Dataset
 import torch
 from torch.nn.functional import one_hot
-from annadca.utils.sequences import get_tokens, compute_weights, encode_sequence
-from annadca.utils.fasta import read_fasta
+from annarbm.utils.sequences import get_tokens, compute_weights, encode_sequence
+from annarbm.utils.fasta import read_fasta
 
 def _merge_duplicates(
     df: pd.DataFrame,

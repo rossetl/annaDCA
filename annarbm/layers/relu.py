@@ -1,8 +1,8 @@
-from annadca.layers.gaussian import GaussianLayer
+from annarbm.layers.gaussian import GaussianLayer
 import torch
 from typing import Optional, Tuple
-from annadca.utils.tg import scer, logscer, sample_truncated_normal
-from annadca.utils.stats import get_meanvar
+from annarbm.utils.tg import scer, logscer, sample_truncated_normal
+from annarbm.utils.stats import get_meanvar
 
 
 class ReLULayer(GaussianLayer):

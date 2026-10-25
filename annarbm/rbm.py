@@ -3,11 +3,11 @@ from typing import Optional, Tuple, Dict, Any
 import torch
 import copy
 from torch.nn import Parameter
-from annadca.layers.layer import Layer, LAYER_REGISTRY, build_layer
-from annadca.layers.gaussian import GaussianLayer
-from annadca.layers.label import CategoricalLabelLayer, LabelNullLayer
-from annadca.utils.functions import mm_left, batched_mm_left, batched_mm_right, batched_outer, outer
-from annadca.utils.stats import get_meanvar, get_mean
+from annarbm.layers.layer import Layer, LAYER_REGISTRY, build_layer
+from annarbm.layers.gaussian import GaussianLayer
+from annarbm.layers.label import CategoricalLabelLayer, LabelNullLayer
+from annarbm.utils.functions import mm_left, batched_mm_left, batched_mm_right, batched_outer, outer
+from annarbm.utils.stats import get_meanvar, get_mean
 
 
 VISIBLE_TYPES = [name for name, cls in LAYER_REGISTRY.items() if cls.can_be_visible and name not in ("categorical", "null")]

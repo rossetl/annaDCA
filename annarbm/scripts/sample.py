@@ -4,15 +4,15 @@ from typing import List, Optional
 
 import torch
 
-from annadca.io import save_chains
-from annadca.layers.label import CategoricalLabelLayer
-from annadca.parser import add_args_sample
-from annadca.rbm import load_rbm
-from annadca.utils.sequences import get_device, get_dtype
+from annarbm.io import save_chains
+from annarbm.layers.label import CategoricalLabelLayer
+from annarbm.parser import add_args_sample
+from annarbm.rbm import load_rbm
+from annarbm.utils.sequences import get_device, get_dtype
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="annadca sample", description="Sample sequences from an annaRBM model.")
+    parser = argparse.ArgumentParser(prog="annarbm sample", description="Sample sequences from an annaRBM model.")
     return add_args_sample(parser)
 
 

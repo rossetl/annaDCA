@@ -33,7 +33,8 @@ def get_eigenvalues_history(
         update = checkpoint['update']
         matrix = model_params[target_matrix].to(device=device, dtype=dtype)
         matrix = matrix.reshape(-1, matrix.shape[-1])
-        eig = torch.linalg.svdvals(matrix).cpu().numpy()
+        # The SVD is not supported on all the accelerators (e.g. MPS): it is computed on the CPU
+        eig = torch.linalg.svdvals(matrix.cpu()).numpy()
         eigenvalues.append(eig.reshape(*eig.shape, 1))
         updates.append(update)
     

@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 import pandas as pd
 import torch
-from annadca.dataset import annaDataset
-from annadca.utils.fasta import write_fasta
+from annarbm.dataset import annaDataset
+from annarbm.utils.fasta import write_fasta
 
 
 def test_csv_categorical(tmp_path):

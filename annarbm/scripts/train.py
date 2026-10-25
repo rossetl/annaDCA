@@ -11,15 +11,15 @@ import torch
 from torch.optim import SGD
 from tqdm import tqdm
 
-from annadca.dataset import AnnaDataset
-from annadca.parser import add_args_train
-from annadca.rbm import get_rbm, load_rbm, save_checkpoint
-from annadca.utils.analysis import label_accuracy, two_point_pearson
-from annadca.utils.sequences import get_device, get_dtype
+from annarbm.dataset import AnnaDataset
+from annarbm.parser import add_args_train
+from annarbm.rbm import get_rbm, load_rbm, save_checkpoint
+from annarbm.utils.analysis import label_accuracy, two_point_pearson
+from annarbm.utils.sequences import get_device, get_dtype
 
 
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="annadca train", description="Train an annaRBM model.")
+    parser = argparse.ArgumentParser(prog="annarbm train", description="Train an annaRBM model.")
     return add_args_train(parser)
 
 

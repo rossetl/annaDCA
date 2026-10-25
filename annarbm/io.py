@@ -1,8 +1,8 @@
 from typing import Dict, Optional
 import torch
 from torch.nn.functional import one_hot
-from annadca.utils.sequences import encode_sequence
-from annadca.utils.fasta import read_fasta, write_fasta
+from annarbm.utils.sequences import encode_sequence
+from annarbm.utils.fasta import read_fasta, write_fasta
 
 
 def save_chains(

@@ -1,5 +1,5 @@
-from annadca.layers.layer import Layer
-from annadca.layers.potts import PottsLayer
+from annarbm.layers.layer import Layer
+from annarbm.layers.potts import PottsLayer
 import torch
 from typing import Optional, Tuple
 
