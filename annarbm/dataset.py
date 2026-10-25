@@ -1,14 +1,64 @@
-from typing import Any
+from typing import Any, Iterator, Dict, Optional
+import warnings
 import numpy as np
 import pandas as pd
 
 from torch.utils.data import Dataset
 import torch
 from torch.nn.functional import one_hot
-from adabmDCA.fasta import get_tokens, compute_weights, import_from_fasta, encode_sequence
+from annarbm.utils.sequences import get_tokens, compute_weights, encode_sequence
+from annarbm.utils.fasta import read_fasta
 
-class annaDataset(Dataset):
-    
+def _merge_duplicates(
+    df: pd.DataFrame,
+    key: str,
+    column_labels: str,
+    continuous_labels: bool,
+) -> pd.DataFrame:
+    """Keeps one row for each value of `key`. Duplicates take the first non-missing label; if they carry different labels,
+    the label is set to their mean for continuous labels, and to missing for categorical labels.
+
+    Args:
+        df (pd.DataFrame): Data frame.
+        key (str): Column identifying the duplicates (names or sequences).
+        column_labels (str): Column of the labels.
+        continuous_labels (bool): Whether the labels are continuous.
+
+    Returns:
+        pd.DataFrame: Data frame without duplicates.
+    """
+    if not df[key].duplicated().any():
+        return df
+    df = df.copy()
+    groups = df.groupby(key, sort=False)[column_labels]
+    conflict = groups.transform("nunique") > 1
+    merged = groups.transform("first")
+    if continuous_labels:
+        merged = merged.where(~conflict, groups.transform("mean"))
+    else:
+        merged = merged.where(~conflict, np.nan)
+    df[column_labels] = merged
+    num_conflicts = df.loc[conflict, key].nunique()
+    if num_conflicts > 0:
+        action = "averaged" if continuous_labels else "set to missing"
+        warnings.warn(f"{num_conflicts} duplicated entries of '{key}' have different labels: their label is {action}.")
+    return df.drop_duplicates(subset=[key]).reset_index(drop=True)
+
+
+def _to_python(x):
+    """Converts numpy scalars to python scalars."""
+    return x.item() if isinstance(x, np.generic) else x
+
+
+class AnnaDataset(Dataset):
+    """Dataset of aligned sequences with their annotations.
+
+    Attributes:
+        data_one_hot (torch.Tensor): Sequences, binary (M, L) or one-hot encoded (M, L, q).
+        labels (torch.Tensor): Labels, one-hot encoded (M, num_classes) for categorical labels (all-zero rows for the
+            missing ones), or standardized (M, 1) for continuous labels.
+        weights (torch.Tensor): Weights of the sequences (M, 1).
+    """
     def __init__(
         self,
         path_data: str,
@@ -29,7 +79,7 @@ class annaDataset(Dataset):
         self.dtype = dtype
         self.data = pd.DataFrame()
         self.data_one_hot = torch.tensor([], dtype=dtype, device=device)
-        self.labels_one_hot = torch.tensor([], dtype=dtype, device=device)
+        self.labels = torch.tensor([], dtype=dtype, device=device)
         self.weights = torch.tensor([], dtype=dtype, device=device)
         self.is_binary = is_binary
         self.column_names = column_names
@@ -86,18 +136,18 @@ class annaDataset(Dataset):
                 raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
             
         # Filter rows where sequences have unknown letters
-        mask = []
-        tokens_list = [a for a in self.tokens]
-        for seq in self.data[column_sequences].values:
-            if not all(a in tokens_list for a in seq):
-                mask.append(False)
-            else:
-                mask.append(True)
+        tokens_set = set(self.tokens)
+        mask = [isinstance(seq, str) and set(seq) <= tokens_set for seq in self.data[column_sequences].values]
         self.data = self.data[mask].reset_index(drop=True)
         print(f"Filtered out {len(mask) - sum(mask)} sequences with unknown letters. Remaining sequences: {sum(mask)}.")
+        if len(self.data) == 0:
+            raise ValueError("No valid sequences found in the dataset. Check the alphabet and the input format.")
+        lengths = self.data[column_sequences].str.len()
+        if lengths.nunique() > 1:
+            raise ValueError("The sequences must be aligned (all of the same length).")
 
         # take only unique sequences
-        self.data = self.data.drop_duplicates(subset=[column_sequences]).reset_index(drop=True)
+        self.data = _merge_duplicates(self.data, column_sequences, column_labels, continuous_labels)
 
         # encode sequences
         self.data_one_hot = torch.tensor(
@@ -136,25 +186,32 @@ class annaDataset(Dataset):
     def parse_labels(self):
         labels = self.data[self.column_labels]
         if self.continuous_labels:
-            self.labels_one_hot = torch.tensor(
-                labels.values,
+            self.labels = torch.tensor(
+                labels.values.astype(np.float64),
                 dtype=self.dtype,
                 device=self.device,
             ).unsqueeze(1)
-            # standardize labels
-            self.labels_mean = self.labels_one_hot.mean(dim=0)
-            self.labels_std = self.labels_one_hot.std(dim=0)
-            self.labels_one_hot = (self.labels_one_hot - self.labels_mean) / self.labels_std
+            # standardize labels, ignoring missing values
+            missing = torch.isnan(self.labels)
+            valid_labels = self.labels[~missing]
+            self.labels_mean = valid_labels.mean().view(1)
+            self.labels_std = valid_labels.std().view(1)
+            self.labels = (self.labels - self.labels_mean) / self.labels_std
+            if missing.any():
+                warnings.warn(f"{missing.sum().item()} sequences have a missing label: it is set to the mean label value.")
+                self.labels[missing] = 0.0
         else:
             unique_labels = np.unique(labels.dropna())
-            self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
+            self.idx_to_label = {i: _to_python(label) for i, label in enumerate(unique_labels)}
             self.label_to_idx = {label: i for i, label in self.idx_to_label.items()}
             label_indices = labels.map(self.label_to_idx).fillna(-1).astype(int)
             num_classes = len(unique_labels)
             one_hot = np.zeros((len(labels), num_classes), dtype=np.float32)
             valid = label_indices != -1
             one_hot[valid, label_indices[valid]] = 1.0
-            self.labels_one_hot = torch.tensor(
+            if not valid.all():
+                print(f"{(~valid).sum()} sequences have a missing label.")
+            self.labels = torch.tensor(
                 one_hot,
                 dtype=self.dtype,
                 device=self.device,
@@ -169,10 +226,11 @@ class annaDataset(Dataset):
         column_labels: str = "label",
     ):
         
-        df = pd.read_csv(path_ann, na_values=[""])
+        df = pd.read_csv(path_ann, na_values=[""], dtype={column_names: str, column_sequences: str})
         assert column_names in df.columns, f"Column {column_names} not found in the labels file."
         assert column_labels in df.columns, f"Column {column_labels} not found in the labels file."
-        
+        df = _merge_duplicates(df, column_names, column_labels, self.continuous_labels)
+
         # If all data comes from the csv file:
         if len(self.data) == 0:
             assert column_sequences in df.columns, f"Column {column_sequences} not found in the labels file."
@@ -192,9 +250,9 @@ class annaDataset(Dataset):
         self,
         path_data: str,
     ):
-        names, sequences = import_from_fasta(path_data)
+        names, sequences = read_fasta(path_data)
         self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": sequences}  
+            {self.column_names: names, self.column_sequences: sequences}
         )
 
 
@@ -202,14 +260,12 @@ class annaDataset(Dataset):
         self,
         path_data: str,
     ):
-        data = torch.tensor(
-            np.loadtxt(path_data),
-            dtype=self.dtype,
-            device=self.device,
-        )
+        data = np.atleast_2d(np.loadtxt(path_data)).astype(int)
+        # Sequences are stored as strings of tokens, as for the categorical data
+        sequences = ["".join(str(x) for x in row) for row in data]
         names = np.arange(len(data)).astype(str)
         self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": data}  
+            {self.column_names: names, self.column_sequences: sequences}
         )
     
     def to_label(
@@ -217,13 +273,17 @@ class annaDataset(Dataset):
         labels: torch.Tensor | np.ndarray | list,
     ) -> np.ndarray:
         """Converts the one-hot encoded labels (or their probability) to the original labels.
+        For continuous labels, maps the standardized labels back to the original scale.
         
         Args:
             labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their probability.
             
         Returns:
-            torch.Tensor: Original labels.
+            np.ndarray: Original labels.
         """
+        if self.continuous_labels:
+            labels = self.unstandardize_labels(torch.as_tensor(labels, dtype=self.dtype, device=self.device))
+            return labels.view(-1).cpu().numpy()
         if isinstance(labels, torch.Tensor):
             labels = labels.cpu().numpy()
         elif isinstance(labels, list):
@@ -288,6 +348,53 @@ class annaDataset(Dataset):
         return torch.tensor(one_hot_labels, dtype=self.dtype, device=self.device)
 
 
+    @property
+    def labels_one_hot(self) -> torch.Tensor:
+        """Alias of `labels`, kept for backward compatibility."""
+        return self.labels
+
+
+    @labels_one_hot.setter
+    def labels_one_hot(self, value: torch.Tensor):
+        self.labels = value
+
+
+    def metadata(self) -> Dict[str, Any]:
+        """Information needed to interpret the model outputs, made of plain python types (saved in the checkpoints)."""
+        return {
+            "tokens": self.tokens,
+            "is_binary": self.is_binary,
+            "continuous_labels": self.continuous_labels,
+            "idx_to_label": dict(self.idx_to_label),
+            "labels_mean": float(self.labels_mean.view(-1)[0]),
+            "labels_std": float(self.labels_std.view(-1)[0]),
+        }
+
+
+    def iterate_batches(
+        self,
+        batch_size: int,
+        generator: Optional[torch.Generator] = None,
+    ) -> Iterator[Dict[str, torch.Tensor]]:
+        """Infinite iterator over random batches. The samples are visited in a new random order at each epoch,
+        so that all of them are used; a batch at the boundary between two epochs takes samples from both.
+
+        Args:
+            batch_size (int): Batch size, at most the size of the dataset.
+            generator (torch.Generator, optional): Random number generator.
+
+        Yields:
+            Dict[str, torch.Tensor]: Batch with keys 'visible', 'label' and 'weight'.
+        """
+        assert 0 < batch_size <= len(self), f"The batch size must be between 1 and the dataset size ({len(self)})."
+        indices = torch.empty(0, dtype=torch.long)
+        while True:
+            if len(indices) < batch_size:
+                indices = torch.cat([indices, torch.randperm(len(self), generator=generator)])
+            batch, indices = indices[:batch_size].to(self.data_one_hot.device), indices[batch_size:]
+            yield self[batch]
+
+
     def __len__(self):
         return len(self.data)
 
@@ -295,7 +402,7 @@ class annaDataset(Dataset):
     def __getitem__(self, idx: int) -> Any:
         return {
             "visible": self.data_one_hot[idx],
-            "label": self.labels_one_hot[idx],
+            "label": self.labels[idx],
             "weight": self.weights[idx],
         }
     
@@ -327,16 +434,16 @@ class annaDataset(Dataset):
         if self.continuous_labels:
             return 1
         else:
-            return self.labels_one_hot.shape[1]
+            return self.labels.shape[1]
     
     
-    def get_effective_size(self) -> int:
+    def get_effective_size(self) -> float:
         """Returns the effective size (Meff) of the dataset.
 
         Returns:
-            int: Effective size of the dataset.
+            float: Effective size of the dataset.
         """
-        return int(self.weights.sum())
+        return float(self.weights.sum())
     
     
     def shuffle(self) -> None:
@@ -347,4 +454,8 @@ class annaDataset(Dataset):
         self.data = self.data.iloc[perm.numpy()].reset_index(drop=True)
         self.data_one_hot = self.data_one_hot[perm]
         self.weights = self.weights[perm]
-        self.labels_one_hot = self.labels_one_hot[perm]
+        self.labels = self.labels[perm]
+
+
+# Backward compatible name
+annaDataset = AnnaDataset
