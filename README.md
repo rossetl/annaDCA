@@ -6,16 +6,20 @@ This package contains the methods and scripts to train and sample an RBM model p
 </p>
 
 ## ⬇️ Installation
+The project is managed with [uv](https://docs.astral.sh/uv/).
 ### Option 1: from PyPI
+Add the package to your uv project:
 ```bash
-python -m pip install annadca
+uv add annadca
 ```
+or install it in the current environment with `uv pip install annadca` (or `python -m pip install annadca`).
 ### Option 2: cloning the repository
 ```bash
 git clone https://github.com/rossetl/annaDCA.git
 cd annaDCA
-python -m pip install .
+uv sync
 ```
+`uv sync` creates the virtual environment `.venv` with the locked dependencies (`uv.lock`) and the development tools. The plotting helpers in `annadca.plot` need the `plot` extra: `uv sync --extra plot`. Commands are then run in the environment with `uv run`, e.g. `uv run annadca train -h`.
 
 ## 📘 Usage
 After installation, all the main routines can be launched through the command-line interface using the command `annadca`. For now, only the `train` routine is implemented
@@ -51,7 +55,7 @@ The model supports the following input data format:
     - `csv` format: the file must contain one column with the aligned training sequences.
 
 #### Annotations
-By default, the annotations are treated as categorical: each distinct value of the label column is a class. Missing annotations are allowed and are encoded as an all-zero label vector. Use `--continuous_labels` to treat the annotations as real numbers: they are standardized and modeled with a Gaussian label layer.
+By default, the annotations are treated as categorical: each distinct value of the label column is a class. Missing annotations are allowed (empty fields, or sequences absent from the annotation file). By default (`--missing_labels posterior`), the label of an unannotated sequence is summed over with its posterior p(label | sequence) computed by the model, which is the exact gradient of the likelihood of the unannotated sequences. With `--missing_labels zero`, the missing label is replaced by an all-zero label vector, which removes the coupling between the label and the hidden layer for that sequence. Use `--continuous_labels` to treat the annotations as real numbers: they are standardized and modeled with a Gaussian label layer.
 
 ### ⚙️ Model and training options
 - `--potential`: type of hidden units, among `bernoulli`, `gaussian` and `relu`.
@@ -79,5 +83,5 @@ Each layer of the model is a subclass of `annadca.layers.Layer`, so that new typ
 
 ## 🧪 Tests
 ```bash
-python -m pytest tests
+uv run pytest
 ```

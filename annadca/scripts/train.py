@@ -49,6 +49,8 @@ if __name__ == '__main__':
     print(template.format("L2 regularization:", args.l2))
     print(template.format("Data initialization:", str(args.init_from_data)))
     print(template.format("Continuous labels:", str(args.continuous_labels)))
+    if not args.continuous_labels:
+        print(template.format("Missing labels:", args.missing_labels))
     if args.pseudocount is not None:
         print(template.format("Pseudocount:", args.pseudocount))
     print(template.format("Random seed:", args.seed))
@@ -218,6 +220,7 @@ if __name__ == '__main__':
         f.write(template.format("standardized:", str(not (args.no_standardize or args.no_centering))))
         f.write(template.format("data init:", str(args.init_from_data)))
         f.write(template.format("continuous labels:", str(args.continuous_labels)))
+        f.write(template.format("missing labels:", args.missing_labels))
         f.write(template.format("l1 strength:", args.l1))
         f.write(template.format("l2 strength:", args.l2))
         f.write(template.format("random seed:", args.seed))
@@ -267,6 +270,7 @@ if __name__ == '__main__':
                 l1l2_strength=args.l1l2,
                 standardize=not (args.no_standardize or args.no_centering),
                 centered=not args.no_centering,
+                missing_labels=args.missing_labels,
             )
             
             # normalize the gradients

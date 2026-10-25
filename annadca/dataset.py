@@ -161,6 +161,8 @@ class annaDataset(Dataset):
             one_hot = np.zeros((len(labels), num_classes), dtype=np.float32)
             valid = label_indices != -1
             one_hot[valid, label_indices[valid]] = 1.0
+            if not valid.all():
+                print(f"{(~valid).sum()} sequences have a missing label.")
             self.labels_one_hot = torch.tensor(
                 one_hot,
                 dtype=self.dtype,

@@ -517,6 +517,47 @@ class AnnaRBM(torch.nn.Module):
         return self.hidden_layer.meanvar(self.input_hiddens(visible, label))
 
 
+    def meanvar_hidden_activation_missing_labels(
+        self,
+        visible: torch.Tensor,
+        label: torch.Tensor,
+        missing: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Positive-phase statistics when some categorical labels are missing. A missing label is summed over with its
+        posterior p(l | v), which gives the exact gradient of the log-likelihood log p(v) of the unannotated sequences.
+
+        For the missing rows, the label is replaced by its posterior, and the hidden mean and variance are those of the
+        mixture sum_c p(c | v) p(h | v, c). Since E[l h] differs from E[l] E[h] under the posterior, the label-hidden
+        covariance of each sample is also returned, to be added to the gradient of the label matrix.
+
+        Args:
+            visible (torch.Tensor): Visible units tensor of shape (batch_size, num_visibles, ...).
+            label (torch.Tensor): Label units tensor of shape (batch_size, num_classes).
+            missing (torch.Tensor): Boolean mask of shape (batch_size,) of the samples with a missing label.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: Hidden means and variances (batch_size, num_hiddens),
+                labels with the posterior in place of the missing ones (batch_size, num_classes), and label-hidden covariance
+                of the missing samples (num_missing, num_classes, num_hiddens).
+        """
+        assert isinstance(self.label_layer, CategoricalLabelLayer), "Marginalizing missing labels requires categorical labels."
+        mean_h, var_h = self.meanvar_hidden_activation(visible, label)
+        label = label.clone()
+        v_missing = visible[missing]
+        posterior = self.predict_labels(v_missing) # (num_missing, num_classes)
+        I_h = batched_mm_left(self.weight_matrix, v_missing).unsqueeze(1) + self.label_matrix.unsqueeze(0)
+        mean_hc, var_hc = self.hidden_layer.meanvar(I_h) # (num_missing, num_classes, num_hiddens)
+        p = posterior.unsqueeze(-1)
+        mixture_mean = (p * mean_hc).sum(dim=1)
+        mixture_var = (p * (var_hc + mean_hc**2)).sum(dim=1) - mixture_mean**2
+        mean_h[missing] = mixture_mean
+        var_h[missing] = mixture_var.clamp_min(0.0)
+        label[missing] = posterior
+        # sum_c p_c (e_c - p) (<h|v,c> - <h|v>)^T = p_c (<h|v,c> - <h|v>) for the row c
+        covariance = p * (mean_hc - mixture_mean.unsqueeze(1))
+        return mean_h, var_h, label, covariance
+
+
     def regularize(
         self,
         l1_strength: float = 0.0,
@@ -552,6 +593,7 @@ class AnnaRBM(torch.nn.Module):
         l1l2_strength: float = 0.0,
         standardize: bool = True,
         centered: bool = True,
+        missing_labels: str = "posterior",
     ) -> None:
         """Computes the gradient of the log-likelihood and stores it in the `.grad` attribute of the parameters.
 
@@ -561,8 +603,12 @@ class AnnaRBM(torch.nn.Module):
 
         where the offsets o and scales s are the data means and standard deviations of the units, mapped back to the
         original parameters W = W' / (s_v s_h), L = L' / (s_l s_h), and to the biases. Only the hidden and label units are
-        rescaled (s_v = 1), since the standard deviation of rarely observed visible states is close to zero. The parameters stay in the original
-        space, so the model can be sampled and evaluated without any transformation.
+        rescaled (s_v = 1), since the standard deviation of rarely observed visible states is close to zero. The parameters
+        stay in the original space, so the model can be sampled and evaluated without any transformation.
+
+        Missing categorical labels are the all-zero rows of `data["label"]`. With `missing_labels="posterior"`, they are
+        summed over with the model posterior p(l | v) (see `meanvar_hidden_activation_missing_labels`); with
+        `missing_labels="zero"`, the all-zero vector is used as label.
 
         Args:
             data (Dict[str, torch.Tensor]): Data batch.
@@ -573,7 +619,9 @@ class AnnaRBM(torch.nn.Module):
             l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
             standardize (bool, optional): Whether to rescale the hidden and label units by their standard deviation (implies centering). Defaults to True.
             centered (bool, optional): Whether to center the units by their mean. Defaults to True.
+            missing_labels (str, optional): How to treat the missing categorical labels: 'posterior' or 'zero'. Defaults to 'posterior'.
         """
+        assert missing_labels in ("posterior", "zero"), f"Unknown missing_labels option: {missing_labels}. Choose among 'posterior' and 'zero'."
         centered = centered or standardize
         v_pos, l_pos = data["visible"], data["label"]
         v_neg, l_neg = chains["visible"], chains["label"]
@@ -582,7 +630,15 @@ class AnnaRBM(torch.nn.Module):
         num_chains = len(v_neg)
 
         # Hidden distribution means and variances
-        h_pos, var_h_pos = self.meanvar_hidden_activation(v_pos, l_pos)
+        missing = None
+        if missing_labels == "posterior" and isinstance(self.label_layer, CategoricalLabelLayer):
+            missing = l_pos.sum(dim=-1) == 0
+            if not missing.any():
+                missing = None
+        if missing is None:
+            h_pos, var_h_pos = self.meanvar_hidden_activation(v_pos, l_pos)
+        else:
+            h_pos, var_h_pos, l_pos, label_hidden_cov = self.meanvar_hidden_activation_missing_labels(v_pos, l_pos, missing)
         h_neg, var_h_neg = self.meanvar_hidden_activation(v_neg, l_neg)
 
         # Gradient of the parameters of the layers
@@ -631,6 +687,9 @@ class AnnaRBM(torch.nn.Module):
         h_neg = (h_neg - self.offset_h) / self.scale_h
         grad_weight_matrix = batched_outer(multiply(v_pos, weights), h_pos) - batched_outer(v_neg, h_neg) / num_chains
         grad_label_matrix = batched_outer(multiply(l_pos, weights), h_pos) - batched_outer(l_neg, h_neg) / num_chains
+        if missing is not None:
+            # The covariance is invariant under centering and scales like l h
+            grad_label_matrix += torch.einsum("n,nch->ch", weights[missing], label_hidden_cov) / outer(self.scale_l, self.scale_h)
 
         # Map the gradient back to the original parameters
         grad_weight_matrix = grad_weight_matrix / outer(self.scale_v, self.scale_h)
@@ -657,6 +716,7 @@ class AnnaRBM(torch.nn.Module):
         l1l2_strength: float = 0.0,
         standardize: bool = True,
         centered: bool = True,
+        missing_labels: str = "posterior",
     ) -> Dict[str, torch.Tensor]:
         """Computes the gradient of the parameters of the model and updates the Markov chains using the Persistent Contrastive Divergence algorithm.
         The parameters are not updated: the optimizer step has to be performed afterwards.
@@ -671,6 +731,7 @@ class AnnaRBM(torch.nn.Module):
             l1l2_strength (float, optional): L1L2 regularization weight. Defaults to 0.0.
             standardize (bool, optional): Whether to use the standardized gradient. Defaults to True.
             centered (bool, optional): Whether to use the centered gradient. Defaults to True.
+            missing_labels (str, optional): How to treat the missing categorical labels: 'posterior' or 'zero'. Defaults to 'posterior'.
 
         Returns:
             Dict[str, torch.Tensor]: Updated chains.
@@ -685,6 +746,7 @@ class AnnaRBM(torch.nn.Module):
             l1l2_strength=l1l2_strength,
             standardize=standardize,
             centered=centered,
+            missing_labels=missing_labels,
         )
 
         # Update the persistent chains

@@ -29,6 +29,7 @@ def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParse
     dca_args.add_argument("--save_every",         type=int,   default=1000,         help="(Defaults to 1000). Frequency (in number of updates) at which the model is saved.")
     dca_args.add_argument("--seed",               type=int,   default=0,            help="(Defaults to 0). Seed for the random number generator.")
     dca_args.add_argument("--device",             type=str,   default="cuda",       help="(Defaults to cuda). Device to be used.")
+    dca_args.add_argument("--missing_labels",     type=str,   default="posterior",  help="(Defaults to posterior). How to treat the sequences without annotation (categorical labels only). 'posterior': the missing label is summed over with its posterior p(label | sequence); 'zero': the label is set to the all-zero vector.", choices=["posterior", "zero"])
     dca_args.add_argument("--no_compile",         action="store_true",              help="(Defaults to False). If specified, the sampling functions are not compiled with torch.compile.")
     dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float32", "float64"])
     

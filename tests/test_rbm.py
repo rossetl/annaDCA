@@ -97,18 +97,23 @@ def test_init_params_from_data():
 
 # Gradient tests: the gradient of the log-likelihood estimated by PCD is the gradient of the surrogate
 #   S(θ) = - <F(v, l)>_data + <F(v, l)>_chains,
-# where F(v, l) is the energy of (v, l) after marginalizing over the hidden units.
+# where F(v, l) is the energy of (v, l) after marginalizing over the hidden units. For the data with a missing
+# label, F(v, l) is replaced by F(v) = -log sum_l exp(-F(v, l)) (posterior approach).
 
 GRADIENT_CASES = [
-    ("bernoulli", 4, "bernoulli", False),
-    ("potts", (4, 3), "gaussian", False),
-    ("potts", (4, 3), "relu", False),
-    ("gaussian", 4, "relu", True),
-    ("bernoulli", 4, "bernoulli", True),
+    ("bernoulli", 4, "bernoulli", False, False),
+    ("potts", (4, 3), "gaussian", False, False),
+    ("potts", (4, 3), "relu", False, False),
+    ("gaussian", 4, "relu", True, False),
+    ("bernoulli", 4, "bernoulli", True, False),
+    # with missing labels
+    ("bernoulli", 4, "bernoulli", False, True),
+    ("potts", (4, 3), "gaussian", False, True),
+    ("potts", (4, 3), "relu", False, True),
 ]
 
 
-def _gradient_setup(visible_type, visible_shape, hidden_type, continuous_label, seed=0):
+def _gradient_setup(visible_type, visible_shape, hidden_type, continuous_label, missing_labels, seed=0):
     torch.manual_seed(seed)
     num_classes = 1 if continuous_label else 3
     rbm = get_rbm(visible_type, hidden_type, visible_shape, 5, num_classes, continuous_label=continuous_label).to(dtype=DTYPE)
@@ -121,6 +126,8 @@ def _gradient_setup(visible_type, visible_shape, hidden_type, continuous_label, 
     data = _randomize(data_model, std=2 * std, seed=seed + 1).sample(gibbs_steps=5, num_samples=64)
     assert all(torch.isfinite(x).all() for x in data.values())
     data["weight"] = torch.rand(64, 1, dtype=DTYPE)
+    if missing_labels:
+        data["label"][::3] = 0.0
     chains = rbm.sample(gibbs_steps=5, num_samples=48)
     return rbm, data, chains
 
@@ -131,6 +138,9 @@ class _FreeEnergy(torch.nn.Module):
         self.rbm = rbm
 
     def forward(self, visible, label):
+        missing = label.sum(dim=-1) == 0
+        if isinstance(self.rbm.label_layer, CategoricalLabelLayer) and missing.any():
+            return torch.where(missing, self.rbm.compute_energy_visibles(visible), self.rbm.compute_energy_visibles_labels(visible, label))
         return self.rbm.compute_energy_visibles_labels(visible, label)
 
 
@@ -248,3 +258,26 @@ def test_state_dict_roundtrip():
 def test_invalid_hidden_layer():
     with pytest.raises(AssertionError):
         get_rbm("bernoulli", "potts", 4, (3, 2), 2)
+
+
+
+class _ZeroLabelFreeEnergy(_FreeEnergy):
+    def forward(self, visible, label):
+        return self.rbm.compute_energy_visibles_labels(visible, label)
+
+
+def test_missing_labels_zero_option():
+    """With missing_labels='zero', the all-zero vector is used as the label of the unannotated sequences."""
+    rbm, data, chains = _gradient_setup("bernoulli", 4, "bernoulli", False, True)
+    params = {k: p.detach().clone().requires_grad_(True) for k, p in rbm.named_parameters()}
+    state = {f"rbm.{k}": p for k, p in params.items()}
+    free_energy = _ZeroLabelFreeEnergy(rbm)
+    w = data["weight"].view(-1) / data["weight"].sum()
+    with torch.enable_grad():
+        F_data = torch.func.functional_call(free_energy, state, (data["visible"], data["label"]))
+        F_chains = torch.func.functional_call(free_energy, state, (chains["visible"], chains["label"]))
+        S = - (w * F_data).sum() + F_chains.mean()
+        expected = dict(zip(params.keys(), torch.autograd.grad(S, list(params.values()))))
+    rbm.apply_gradient(data, chains, standardize=False, centered=False, missing_labels="zero")
+    for name, p in rbm.named_parameters():
+        assert torch.allclose(p.grad, expected[name], atol=1e-10), name

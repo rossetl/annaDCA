@@ -1,3 +1,45 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "annadca"
+version = "0.2.1"
+description = "Annotation Assisted Direct Coupling Analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "Lorenzo Rosset, Aurélien Decelle, Beatriz Seoane, Francesco Zamponi, Martin Weigt"}]
+maintainers = [{name = "Lorenzo Rosset", email = "rosset.lorenzo@gmail.com"}]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = [
+    "adabmDCA>=0.7.0",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "torch>=2.1",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+
+[project.scripts]
+annadca = "annadca.cli:main"
+
+[project.urls]
+Repository = "https://github.com/rossetl/annaDCA"
+Issues = "https://github.com/rossetl/annaDCA/issues"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["annadca*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

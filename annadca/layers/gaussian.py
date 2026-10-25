@@ -75,7 +75,7 @@ class GaussianLayer(Layer):
     def meanvar(self, I: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         abs_scale = self._abs_scale()
         mean = (I + self.bias) / abs_scale
-        var = (1.0 / abs_scale).expand_as(mean)
+        var = torch.ones_like(mean) / abs_scale
         return mean, var
 
 
