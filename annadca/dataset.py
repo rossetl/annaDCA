@@ -1,11 +1,13 @@
 from typing import Any
+import warnings
 import numpy as np
 import pandas as pd
 
 from torch.utils.data import Dataset
 import torch
 from torch.nn.functional import one_hot
-from adabmDCA.fasta import get_tokens, compute_weights, import_from_fasta, encode_sequence
+from adabmDCA.fasta import get_tokens, compute_weights, encode_sequence
+from annadca.utils.fasta import read_fasta
 
 class annaDataset(Dataset):
     
@@ -86,15 +88,15 @@ class annaDataset(Dataset):
                 raise ValueError("The annotations file must be provided if data are taken from a fasta file.")
             
         # Filter rows where sequences have unknown letters
-        mask = []
-        tokens_list = [a for a in self.tokens]
-        for seq in self.data[column_sequences].values:
-            if not all(a in tokens_list for a in seq):
-                mask.append(False)
-            else:
-                mask.append(True)
+        tokens_set = set(self.tokens)
+        mask = [isinstance(seq, str) and set(seq) <= tokens_set for seq in self.data[column_sequences].values]
         self.data = self.data[mask].reset_index(drop=True)
         print(f"Filtered out {len(mask) - sum(mask)} sequences with unknown letters. Remaining sequences: {sum(mask)}.")
+        if len(self.data) == 0:
+            raise ValueError("No valid sequences found in the dataset. Check the alphabet and the input format.")
+        lengths = self.data[column_sequences].str.len()
+        if lengths.nunique() > 1:
+            raise ValueError("The sequences must be aligned (all of the same length).")
 
         # take only unique sequences
         self.data = self.data.drop_duplicates(subset=[column_sequences]).reset_index(drop=True)
@@ -137,14 +139,19 @@ class annaDataset(Dataset):
         labels = self.data[self.column_labels]
         if self.continuous_labels:
             self.labels_one_hot = torch.tensor(
-                labels.values,
+                labels.values.astype(np.float64),
                 dtype=self.dtype,
                 device=self.device,
             ).unsqueeze(1)
-            # standardize labels
-            self.labels_mean = self.labels_one_hot.mean(dim=0)
-            self.labels_std = self.labels_one_hot.std(dim=0)
+            # standardize labels, ignoring missing values
+            missing = torch.isnan(self.labels_one_hot)
+            valid_labels = self.labels_one_hot[~missing]
+            self.labels_mean = valid_labels.mean().view(1)
+            self.labels_std = valid_labels.std().view(1)
             self.labels_one_hot = (self.labels_one_hot - self.labels_mean) / self.labels_std
+            if missing.any():
+                warnings.warn(f"{missing.sum().item()} sequences have a missing label: it is set to the mean label value.")
+                self.labels_one_hot[missing] = 0.0
         else:
             unique_labels = np.unique(labels.dropna())
             self.idx_to_label = {i: label for i, label in enumerate(unique_labels)}
@@ -169,7 +176,7 @@ class annaDataset(Dataset):
         column_labels: str = "label",
     ):
         
-        df = pd.read_csv(path_ann, na_values=[""])
+        df = pd.read_csv(path_ann, na_values=[""], dtype={column_names: str, column_sequences: str})
         assert column_names in df.columns, f"Column {column_names} not found in the labels file."
         assert column_labels in df.columns, f"Column {column_labels} not found in the labels file."
         
@@ -192,9 +199,9 @@ class annaDataset(Dataset):
         self,
         path_data: str,
     ):
-        names, sequences = import_from_fasta(path_data)
+        names, sequences = read_fasta(path_data)
         self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": sequences}  
+            {self.column_names: names, self.column_sequences: sequences}
         )
 
 
@@ -202,14 +209,12 @@ class annaDataset(Dataset):
         self,
         path_data: str,
     ):
-        data = torch.tensor(
-            np.loadtxt(path_data),
-            dtype=self.dtype,
-            device=self.device,
-        )
+        data = np.atleast_2d(np.loadtxt(path_data)).astype(int)
+        # Sequences are stored as strings of tokens, as for the categorical data
+        sequences = ["".join(str(x) for x in row) for row in data]
         names = np.arange(len(data)).astype(str)
         self.data = pd.DataFrame.from_dict(
-            {"name": names, "sequence": data}  
+            {self.column_names: names, self.column_sequences: sequences}
         )
     
     def to_label(
@@ -217,13 +222,17 @@ class annaDataset(Dataset):
         labels: torch.Tensor | np.ndarray | list,
     ) -> np.ndarray:
         """Converts the one-hot encoded labels (or their probability) to the original labels.
+        For continuous labels, maps the standardized labels back to the original scale.
         
         Args:
             labels (torch.Tensor | np.ndarray | list): One-hot encoded labels or their probability.
             
         Returns:
-            torch.Tensor: Original labels.
+            np.ndarray: Original labels.
         """
+        if self.continuous_labels:
+            labels = self.unstandardize_labels(torch.as_tensor(labels, dtype=self.dtype, device=self.device))
+            return labels.view(-1).cpu().numpy()
         if isinstance(labels, torch.Tensor):
             labels = labels.cpu().numpy()
         elif isinstance(labels, list):

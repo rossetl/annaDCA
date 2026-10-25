@@ -24,6 +24,11 @@ setup(
         ],
     },
     install_requires=[
-        'adabmDCA>=0.5.0'
+        'adabmDCA>=0.7.0',
+        'torch>=2.0',
+        'numpy',
+        'pandas',
+        'tqdm',
+        'matplotlib',
     ],
 )

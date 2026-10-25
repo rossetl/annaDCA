@@ -26,6 +26,8 @@ def get_eigenvalues_history(
     updates = []
     eigenvalues = []
     for checkpoint_file in os.listdir(checkpoints_repo):
+        if not checkpoint_file.endswith(".pt"):
+            continue
         checkpoint = torch.load(os.path.join(checkpoints_repo, checkpoint_file), map_location=device)
         model_params = checkpoint['model_state_dict']
         update = checkpoint['update']
@@ -50,16 +52,18 @@ def mutual_information(
     """Estimates the mutual information between the visible and the label units.
     
     Args:
-        visible (torch.Tensor): Visible units.
-        label (torch.Tensor): Label units.
+        visible (torch.Tensor): Visible units of shape (N, L) or (N, L, q).
+        label (torch.Tensor): Label units of shape (N, num_classes).
         
     Returns:
-        torch.Tensor: The mutual information between the visible and the label units
+        torch.Tensor: The contributions to the mutual information between each label class and each visible unit (and state),
+            of shape (num_classes, L) or (num_classes, L, q).
     """
     nchains = len(visible)
     fl = label.mean(0)
     fi = visible.mean(0)
-    fil = label.T @ visible / nchains
-    Iil = fil * (torch.log(1e-8 + fil) - torch.log(1e-8 + (fl.unsqueeze(1) @ fi.unsqueeze(0))))
-    
+    fil = torch.einsum("nc,n...->c...", label, visible) / nchains
+    fl_fi = torch.einsum("c,...->c...", fl, fi)
+    Iil = fil * (torch.log(1e-8 + fil) - torch.log(1e-8 + fl_fi))
+
     return Iil

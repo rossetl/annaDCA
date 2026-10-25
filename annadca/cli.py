@@ -25,9 +25,10 @@ def main():
     # Run the corresponding Python script with the remaining optional arguments
     REPO_SCRIPTS = os.path.join(SCRIPT_DIR, "scripts")
     script_path = os.path.join(REPO_SCRIPTS, SCRIPT)
-    proc = subprocess.call(
+    returncode = subprocess.call(
         [sys.executable, script_path] + sys.argv[2:],
     )
+    sys.exit(returncode)
 
 if __name__ == "__main__":
     main()

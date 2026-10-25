@@ -43,7 +43,8 @@ if __name__ == '__main__':
     print(template.format("Number of chains:", args.nchains))
     print(template.format("Number of Gibbs steps:", args.gibbs_steps))
     print(template.format("Number of epochs:", args.nepochs))
-    print(template.format("Standardized gradient:", str(not args.no_standardize)))
+    print(template.format("Centered gradient:", str(not args.no_centering)))
+    print(template.format("Standardized gradient:", str(not (args.no_standardize or args.no_centering))))
     print(template.format("L1 regularization:", args.l1))
     print(template.format("L2 regularization:", args.l2))
     print(template.format("Data initialization:", str(args.init_from_data)))
@@ -184,7 +185,13 @@ if __name__ == '__main__':
         if args.nchains >= dataset.__len__():
             args.nchains = dataset.__len__()
             warnings.warn("The number of chains is larger than the dataset size. The number of chains is set to the dataset size.")
-        chains = rbm.init_chains(num_samples=args.nchains, data=dataset.data_one_hot, weights=dataset.weights, pseudo_count=args.pseudocount)
+        chains = rbm.init_chains(
+            num_samples=args.nchains,
+            data=dataset.data_one_hot,
+            label=dataset.labels_one_hot,
+            weights=dataset.weights,
+            pseudo_count=args.pseudocount,
+        )
         # Select the optimizer
         optimizer = SGD(rbm.parameters(), lr=args.lr, maximize=True)
         for key, value in rbm.named_parameters():
@@ -207,7 +214,8 @@ if __name__ == '__main__':
         f.write(template.format("gibbs steps:", args.gibbs_steps))
         f.write(template.format("lr:", args.lr))
         f.write(template.format("pseudo count:", args.pseudocount))
-        f.write(template.format("standardized:", str(not args.no_standardize)))
+        f.write(template.format("centered:", str(not args.no_centering)))
+        f.write(template.format("standardized:", str(not (args.no_standardize or args.no_centering))))
         f.write(template.format("data init:", str(args.init_from_data)))
         f.write(template.format("continuous labels:", str(args.continuous_labels)))
         f.write(template.format("l1 strength:", args.l1))
@@ -228,10 +236,9 @@ if __name__ == '__main__':
     # Allows to iterate indefinitely on the dataloader without worrying on the epochs
     dataloader = cycle(dataloader)
     
-    if torch.__version__ >= "2.0.0":
-        print("Compiling the model...")
-        rbm = torch.compile(rbm, mode="default")
-        print("Model compiled successfully.")
+    if not args.no_compile:
+        rbm.compile_sampling()
+        print("Sampling functions will be compiled at the first iteration.")
     print("\n")
 
     # Train the model
@@ -258,7 +265,8 @@ if __name__ == '__main__':
                 l1_strength=args.l1,
                 l2_strength=args.l2,
                 l1l2_strength=args.l1l2,
-                standardize=not args.no_standardize,
+                standardize=not (args.no_standardize or args.no_centering),
+                centered=not args.no_centering,
             )
             
             # normalize the gradients

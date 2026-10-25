@@ -21,13 +21,15 @@ def add_args_annadca(parser : argparse.ArgumentParser) -> argparse.ArgumentParse
     dca_args.add_argument("--l1",                 type=float, default=0.0,          help="(Defaults to 0.0). L1 regularization strength.")
     dca_args.add_argument("--l2",                 type=float, default=0.0,          help="(Defaults to 0.0). L2 regularization strength.")
     dca_args.add_argument("--l1l2",               type=float, default=0.0,          help="(Defaults to 0.0). L1+L2 regularization strength.")
-    dca_args.add_argument("--no_standardize",     action="store_true",              help="(Defaults to False). If specified, the unstandardized version of the gradient is used.")
+    dca_args.add_argument("--no_standardize",     action="store_true",              help="(Defaults to False). If specified, the gradient is only centered and not rescaled by the standard deviation of the units.")
+    dca_args.add_argument("--no_centering",       action="store_true",              help="(Defaults to False). If specified, the plain (neither centered nor standardized) gradient is used.")
     dca_args.add_argument("--continuous_labels",  action="store_true",              help="(Defaults to False). If specified, the labels are treated as continuous variables.")
     dca_args.add_argument("--init_from_data",     action="store_true",              help="(Defaults to False). If specified, the visible layer parameters are initialized using the data statistics.")
     dca_args.add_argument("--is_binary",          action="store_true",              help="(Defaults to False). If specified, the sequences are assumed to be binary (0/1) and the model is trained accordingly.")
     dca_args.add_argument("--save_every",         type=int,   default=1000,         help="(Defaults to 1000). Frequency (in number of updates) at which the model is saved.")
     dca_args.add_argument("--seed",               type=int,   default=0,            help="(Defaults to 0). Seed for the random number generator.")
     dca_args.add_argument("--device",             type=str,   default="cuda",       help="(Defaults to cuda). Device to be used.")
+    dca_args.add_argument("--no_compile",         action="store_true",              help="(Defaults to False). If specified, the sampling functions are not compiled with torch.compile.")
     dca_args.add_argument("--dtype",              type=str,   default="float32",    help="(Defaults to float32). Data type to be used.", choices=["float32", "float64"])
     
     return parser
