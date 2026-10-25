@@ -76,25 +76,25 @@ def _connected_correlations(x: torch.Tensor, weights: torch.Tensor | None = None
 
 
 @torch.no_grad()
-def two_point_pearson(
+def two_point_correlations(
     data: torch.Tensor,
     chains: torch.Tensor,
     weights: torch.Tensor | None = None,
     max_features: int = 2000,
     seed: int = 0,
-) -> float:
-    """Pearson correlation coefficient between the connected two-point correlations of the data and of the chains,
-    computed on the pairs of different sites. For long sequences, a random subset of `max_features` features is used.
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Connected two-point correlations of the data and of the chains, for the pairs of features on different sites.
+    For long sequences, a random subset of `max_features` features is used.
 
     Args:
         data (torch.Tensor): Data of shape (M, L) or one-hot (M, L, q).
         chains (torch.Tensor): Chains with the same shape as the data (apart from the first dimension).
         weights (torch.Tensor, optional): Weights of the data. Defaults to uniform.
         max_features (int, optional): Maximum number of features (sites times states) used. Defaults to 2000.
-        seed (int, optional): Seed used to select the features, so that the metric is comparable along the training.
+        seed (int, optional): Seed used to select the features, so that the result is comparable along the training.
 
     Returns:
-        float: Pearson correlation coefficient.
+        Tuple[torch.Tensor, torch.Tensor]: Correlations of the data and of the chains, as flat tensors.
     """
     num_states = data.shape[2] if data.dim() == 3 else 1
     data, chains = data.flatten(1), chains.flatten(1).to(data)
@@ -104,8 +104,24 @@ def two_point_pearson(
         features = torch.randperm(data.shape[1], generator=generator)[:max_features].to(data.device)
         data, chains, site = data[:, features], chains[:, features], site[features]
     mask = site.unsqueeze(0) < site.unsqueeze(1)
-    c_data = _connected_correlations(data, weights)[mask]
-    c_chains = _connected_correlations(chains)[mask]
+    return _connected_correlations(data, weights)[mask], _connected_correlations(chains)[mask]
+
+
+@torch.no_grad()
+def two_point_pearson(
+    data: torch.Tensor,
+    chains: torch.Tensor,
+    weights: torch.Tensor | None = None,
+    max_features: int = 2000,
+    seed: int = 0,
+) -> float:
+    """Pearson correlation coefficient between the connected two-point correlations of the data and of the chains,
+    see `two_point_correlations`.
+
+    Returns:
+        float: Pearson correlation coefficient.
+    """
+    c_data, c_chains = two_point_correlations(data, chains, weights, max_features=max_features, seed=seed)
     return torch.corrcoef(torch.stack([c_data, c_chains]))[0, 1].item()
 
 
